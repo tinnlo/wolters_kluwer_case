@@ -10,11 +10,24 @@
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 venv/
+.pytest_cache/
+
+# Database
+data/
+*.db
+*.sqlite
 
 # Node
 node_modules/
 dist/
 build/
 coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
