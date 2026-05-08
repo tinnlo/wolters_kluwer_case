@@ -4,9 +4,16 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
-from .models import AgentSession, LogEntry, ResearchPlan, Task, TaskStatus, ToolResult
+from .models import (
+    AgentSession,
+    LogEntry,
+    ResearchPlan,
+    SessionStatus,
+    Task,
+    TaskStatus,
+    ToolResult,
+)
 
 
 class StateManager:
@@ -61,7 +68,7 @@ class StateManager:
                     full_content TEXT NOT NULL,
                     metadata_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    FOREIGN KEY (task_id) REFERENCES tasks (id),
+                    FOREIGN KEY (session_id, task_id) REFERENCES tasks (session_id, id),
                     FOREIGN KEY (session_id) REFERENCES sessions (session_id)
                 )
             """)
@@ -80,6 +87,42 @@ class StateManager:
             """)
 
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # Private row-mapping helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_task(row: sqlite3.Row) -> Task:
+        """Build a Task from a database row."""
+        return Task(
+            id=row["id"],
+            description=row["description"],
+            status=TaskStatus(row["status"]),
+            dependencies=json.loads(row["dependencies_json"]),
+            tool_name=row["tool_name"],
+            result=row["result"],
+            error=row["error"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _row_to_tool_result(row: sqlite3.Row) -> ToolResult:
+        """Build a ToolResult from a database row."""
+        return ToolResult(
+            tool_name=row["tool_name"],
+            task_id=row["task_id"],
+            success=bool(row["success"]),
+            summary=row["summary"],
+            full_content=row["full_content"],
+            metadata=json.loads(row["metadata_json"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    # ------------------------------------------------------------------
+    # Sessions
+    # ------------------------------------------------------------------
 
     def create_session(self, session: AgentSession) -> None:
         """Create a new session."""
@@ -105,14 +148,14 @@ class StateManager:
     def update_session(
         self,
         session_id: str,
-        plan: Optional[ResearchPlan] = None,
-        final_report: Optional[str] = None,
-        status: Optional[str] = None,
-        completed_at: Optional[datetime] = None,
+        plan: ResearchPlan | None = None,
+        final_report: str | None = None,
+        status: SessionStatus | None = None,
+        completed_at: datetime | None = None,
     ) -> None:
         """Update session fields."""
-        updates = []
-        params = []
+        updates: list[str] = []
+        params: list[object] = []
 
         if plan is not None:
             updates.append("plan_json = ?")
@@ -124,7 +167,7 @@ class StateManager:
 
         if status is not None:
             updates.append("status = ?")
-            params.append(status)
+            params.append(status.value)
 
         if completed_at is not None:
             updates.append("completed_at = ?")
@@ -140,7 +183,7 @@ class StateManager:
             conn.execute(query, params)
             conn.commit()
 
-    def get_session(self, session_id: str) -> Optional[AgentSession]:
+    def get_session(self, session_id: str) -> AgentSession | None:
         """Retrieve a session by ID."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -165,6 +208,36 @@ class StateManager:
                 if row["completed_at"]
                 else None,
             )
+
+    def list_sessions(self) -> list[AgentSession]:
+        """List all sessions ordered by creation time descending."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM sessions ORDER BY created_at DESC"
+            )
+            sessions = []
+            for row in cursor.fetchall():
+                sessions.append(
+                    AgentSession(
+                        session_id=row["session_id"],
+                        goal=row["goal"],
+                        plan=ResearchPlan.model_validate_json(row["plan_json"])
+                        if row["plan_json"]
+                        else None,
+                        final_report=row["final_report"],
+                        status=row["status"],
+                        created_at=datetime.fromisoformat(row["created_at"]),
+                        completed_at=datetime.fromisoformat(row["completed_at"])
+                        if row["completed_at"]
+                        else None,
+                    )
+                )
+            return sessions
+
+    # ------------------------------------------------------------------
+    # Tasks
+    # ------------------------------------------------------------------
 
     def save_task(self, session_id: str, task: Task) -> None:
         """Save or update a task."""
@@ -191,7 +264,7 @@ class StateManager:
             )
             conn.commit()
 
-    def get_task(self, session_id: str, task_id: str) -> Optional[Task]:
+    def get_task(self, session_id: str, task_id: str) -> Task | None:
         """Retrieve a task by ID."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -200,21 +273,7 @@ class StateManager:
                 (session_id, task_id),
             )
             row = cursor.fetchone()
-
-            if not row:
-                return None
-
-            return Task(
-                id=row["id"],
-                description=row["description"],
-                status=TaskStatus(row["status"]),
-                dependencies=json.loads(row["dependencies_json"]),
-                tool_name=row["tool_name"],
-                result=row["result"],
-                error=row["error"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                updated_at=datetime.fromisoformat(row["updated_at"]),
-            )
+            return self._row_to_task(row) if row else None
 
     def get_session_tasks(self, session_id: str) -> list[Task]:
         """Get all tasks for a session."""
@@ -224,32 +283,15 @@ class StateManager:
                 "SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at",
                 (session_id,),
             )
-
-            tasks = []
-            for row in cursor.fetchall():
-                tasks.append(
-                    Task(
-                        id=row["id"],
-                        description=row["description"],
-                        status=TaskStatus(row["status"]),
-                        dependencies=json.loads(row["dependencies_json"]),
-                        tool_name=row["tool_name"],
-                        result=row["result"],
-                        error=row["error"],
-                        created_at=datetime.fromisoformat(row["created_at"]),
-                        updated_at=datetime.fromisoformat(row["updated_at"]),
-                    )
-                )
-
-            return tasks
+            return [self._row_to_task(row) for row in cursor.fetchall()]
 
     def update_task_status(
         self,
         session_id: str,
         task_id: str,
         status: TaskStatus,
-        result: Optional[str] = None,
-        error: Optional[str] = None,
+        result: str | None = None,
+        error: str | None = None,
     ) -> None:
         """Update task status and result."""
         with sqlite3.connect(self.db_path) as conn:
@@ -269,6 +311,45 @@ class StateManager:
                 ),
             )
             conn.commit()
+
+    def has_pending_tasks(self, session_id: str) -> bool:
+        """Check if session has any pending tasks."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) FROM tasks
+                WHERE session_id = ? AND status IN (?, ?)
+                """,
+                (session_id, TaskStatus.PENDING.value, TaskStatus.IN_PROGRESS.value),
+            )
+            count = cursor.fetchone()[0]
+            return count > 0
+
+    def get_next_task(self, session_id: str) -> Task | None:
+        """Get the next pending task that has all dependencies completed."""
+        tasks = self.get_session_tasks(session_id)
+
+        # Build a map of task statuses
+        task_status_map = {task.id: task.status for task in tasks}
+
+        # Find first pending task with all dependencies completed
+        for task in tasks:
+            if task.status != TaskStatus.PENDING:
+                continue
+
+            dependencies_met = all(
+                task_status_map.get(dep_id) == TaskStatus.COMPLETED
+                for dep_id in task.dependencies
+            )
+
+            if dependencies_met:
+                return task
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Tool results
+    # ------------------------------------------------------------------
 
     def save_tool_result(self, session_id: str, tool_result: ToolResult) -> None:
         """Save a tool execution result."""
@@ -293,6 +374,24 @@ class StateManager:
             )
             conn.commit()
 
+    def delete_tool_results_for_task(self, session_id: str, task_id: str) -> None:
+        """Delete all saved tool results for a specific task in a session.
+
+        Called before resetting a task to PENDING on resume, so that a
+        partially-saved result from a previous interrupted run is not
+        included in synthesis alongside the fresh retry result.
+
+        Args:
+            session_id: The session ID
+            task_id: The task whose results should be deleted
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM tool_results WHERE session_id = ? AND task_id = ?",
+                (session_id, task_id),
+            )
+            conn.commit()
+
     def get_tool_results(self, session_id: str) -> list[ToolResult]:
         """Get all tool results for a session."""
         with sqlite3.connect(self.db_path) as conn:
@@ -301,22 +400,11 @@ class StateManager:
                 "SELECT * FROM tool_results WHERE session_id = ? ORDER BY created_at",
                 (session_id,),
             )
+            return [self._row_to_tool_result(row) for row in cursor.fetchall()]
 
-            results = []
-            for row in cursor.fetchall():
-                results.append(
-                    ToolResult(
-                        tool_name=row["tool_name"],
-                        task_id=row["task_id"],
-                        success=bool(row["success"]),
-                        summary=row["summary"],
-                        full_content=row["full_content"],
-                        metadata=json.loads(row["metadata_json"]),
-                        created_at=datetime.fromisoformat(row["created_at"]),
-                    )
-                )
-
-            return results
+    # ------------------------------------------------------------------
+    # Logs
+    # ------------------------------------------------------------------
 
     def add_log(self, log_entry: LogEntry) -> None:
         """Add a log entry."""
@@ -346,53 +434,14 @@ class StateManager:
                 (session_id,),
             )
 
-            logs = []
-            for row in cursor.fetchall():
-                logs.append(
-                    LogEntry(
-                        session_id=row["session_id"],
-                        timestamp=datetime.fromisoformat(row["timestamp"]),
-                        level=row["level"],
-                        component=row["component"],
-                        message=row["message"],
-                        metadata=json.loads(row["metadata_json"]),
-                    )
+            return [
+                LogEntry(
+                    session_id=row["session_id"],
+                    timestamp=datetime.fromisoformat(row["timestamp"]),
+                    level=row["level"],
+                    component=row["component"],
+                    message=row["message"],
+                    metadata=json.loads(row["metadata_json"]),
                 )
-
-            return logs
-
-    def has_pending_tasks(self, session_id: str) -> bool:
-        """Check if session has any pending tasks."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                """
-                SELECT COUNT(*) FROM tasks
-                WHERE session_id = ? AND status IN (?, ?)
-                """,
-                (session_id, TaskStatus.PENDING.value, TaskStatus.IN_PROGRESS.value),
-            )
-            count = cursor.fetchone()[0]
-            return count > 0
-
-    def get_next_task(self, session_id: str) -> Optional[Task]:
-        """Get the next pending task that has all dependencies completed."""
-        tasks = self.get_session_tasks(session_id)
-
-        # Build a map of task statuses
-        task_status_map = {task.id: task.status for task in tasks}
-
-        # Find first pending task with all dependencies completed
-        for task in tasks:
-            if task.status != TaskStatus.PENDING:
-                continue
-
-            # Check if all dependencies are completed
-            dependencies_met = all(
-                task_status_map.get(dep_id) == TaskStatus.COMPLETED
-                for dep_id in task.dependencies
-            )
-
-            if dependencies_met:
-                return task
-
-        return None
+                for row in cursor.fetchall()
+            ]

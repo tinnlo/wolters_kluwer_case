@@ -131,3 +131,37 @@ def test_save_tool_result():
         assert len(results) == 1
         assert results[0].tool_name == "web_search"
         assert results[0].success is True
+
+
+def test_delete_tool_results_for_task():
+    """Deleting results for a task must not affect results for other tasks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        state = StateManager(str(db_path))
+
+        session = AgentSession(
+            session_id="test-session",
+            goal="Test goal",
+            status="executing",
+        )
+        state.create_session(session)
+
+        def _make_result(task_id: str) -> ToolResult:
+            return ToolResult(
+                tool_name="web_search",
+                task_id=task_id,
+                success=True,
+                summary=f"Summary {task_id}",
+                full_content=f"Content {task_id}",
+                metadata={},
+            )
+
+        state.save_tool_result("test-session", _make_result("task-1"))
+        state.save_tool_result("test-session", _make_result("task-2"))
+
+        # Delete results for task-1 only
+        state.delete_tool_results_for_task("test-session", "task-1")
+
+        results = state.get_tool_results("test-session")
+        assert len(results) == 1
+        assert results[0].task_id == "task-2"

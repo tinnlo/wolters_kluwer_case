@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,17 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
+class SessionStatus(str, Enum):
+    """Agent session lifecycle status."""
+
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    SYNTHESIZING = "synthesizing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class Task(BaseModel):
     """A single research task within a plan."""
 
@@ -30,9 +41,9 @@ class Task(BaseModel):
     dependencies: list[str] = Field(
         default_factory=list, description="Task IDs that must complete first"
     )
-    tool_name: Optional[str] = Field(default=None, description="Tool to use for execution")
-    result: Optional[str] = Field(default=None, description="Task execution result summary")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
+    tool_name: str | None = Field(default=None, description="Tool to use for execution")
+    result: str | None = Field(default=None, description="Task execution result summary")
+    error: str | None = Field(default=None, description="Error message if failed")
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -64,11 +75,11 @@ class AgentSession(BaseModel):
 
     session_id: str = Field(..., description="Unique session identifier")
     goal: str = Field(..., description="The research goal")
-    plan: Optional[ResearchPlan] = Field(default=None, description="The generated plan")
-    final_report: Optional[str] = Field(default=None, description="Synthesized final output")
-    status: str = Field(default="planning", description="Current session phase")
+    plan: ResearchPlan | None = Field(default=None, description="The generated plan")
+    final_report: str | None = Field(default=None, description="Synthesized final output")
+    status: SessionStatus = Field(default=SessionStatus.PLANNING, description="Current session phase")
     created_at: datetime = Field(default_factory=utc_now)
-    completed_at: Optional[datetime] = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
 
 
 class LogEntry(BaseModel):
@@ -76,7 +87,7 @@ class LogEntry(BaseModel):
 
     session_id: str
     timestamp: datetime = Field(default_factory=utc_now)
-    level: str = Field(..., description="Log level: INFO, WARNING, ERROR")
+    level: Literal["INFO", "WARNING", "ERROR"] = Field(..., description="Log level")
     component: str = Field(..., description="Which component generated this log")
     message: str = Field(..., description="Log message")
     metadata: dict[str, Any] = Field(default_factory=dict)

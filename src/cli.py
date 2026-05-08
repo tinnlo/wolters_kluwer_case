@@ -1,15 +1,13 @@
 """Command-line interface for the research agent."""
 
 import sys
-from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.markdown import Markdown
 
-from .models import AgentSession, LogEntry, ResearchPlan, Task, TaskStatus
+from .models import AgentSession, ResearchPlan, Task, TaskStatus
 
 
 class CLI:
@@ -21,13 +19,13 @@ class CLI:
 
     def print_banner(self) -> None:
         """Print welcome banner."""
-        banner = """
-        [bold cyan]╔═══════════════════════════════════════════════════════╗[/bold cyan]
-        [bold cyan]║[/bold cyan]  [bold white]AI Research Assistant[/bold white]                            [bold cyan]║[/bold cyan]
-        [bold cyan]║[/bold cyan]  Break down complex research goals into actions   [bold cyan]║[/bold cyan]
-        [bold cyan]╚═══════════════════════════════════════════════════════╝[/bold cyan]
-        """
-        self.console.print(banner)
+        self.console.print(Panel(
+            "[bold white]AI Research Assistant[/bold white]\n"
+            "Break down complex research goals into actions",
+            border_style="cyan",
+            padding=(0, 2),
+        ))
+        self.console.print()
 
     def get_research_goal(self) -> str:
         """Prompt user for research goal."""
@@ -135,11 +133,3 @@ Tasks: {completed}/{total} completed, {failed} failed
 
         panel = Panel(summary.strip(), border_style="cyan")
         self.console.print(panel)
-
-    def create_progress_context(self, description: str) -> Progress:
-        """Create a progress context for long-running operations."""
-        return Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=self.console,
-        )

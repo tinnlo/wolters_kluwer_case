@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch, AsyncMock
 import pytest
 
 from src.agent import create_agent
-from src.models import ResearchPlan, Task
+from src.models import AgentSession, ResearchPlan, SessionStatus, Task, TaskStatus
 
 
 @pytest.mark.asyncio
@@ -49,20 +49,24 @@ async def test_agent_end_to_end(monkeypatch):
             "answer": "Python async is great for I/O operations",
         }
 
-        with patch("src.planner.OpenAI") as mock_planner_openai, \
-             patch("src.synthesizer.OpenAI") as mock_synth_openai, \
+        with patch("src.planner.AsyncOpenAI") as mock_planner_openai, \
+             patch("src.synthesizer.AsyncOpenAI") as mock_synth_openai, \
              patch("httpx.AsyncClient") as mock_httpx, \
              patch("src.cli.CLI.display_plan", return_value=True), \
              patch("src.cli.CLI.get_research_goal", return_value="Test goal"):
 
-            # Setup OpenAI mocks
+            # Setup OpenAI mocks (AsyncOpenAI — create must be an AsyncMock)
             mock_planner_client = Mock()
             mock_planner_openai.return_value = mock_planner_client
-            mock_planner_client.chat.completions.create.return_value = mock_plan_response
+            mock_planner_client.chat.completions.create = AsyncMock(
+                return_value=mock_plan_response
+            )
 
             mock_synth_client = Mock()
             mock_synth_openai.return_value = mock_synth_client
-            mock_synth_client.chat.completions.create.return_value = mock_synthesis_response
+            mock_synth_client.chat.completions.create = AsyncMock(
+                return_value=mock_synthesis_response
+            )
 
             # Setup Tavily mock
             mock_http_response = Mock()
@@ -80,6 +84,109 @@ async def test_agent_end_to_end(monkeypatch):
             assert "Final Report" in result
             assert "Test report content" in result
 
-            # Verify database state
-            session = agent.state.get_session(agent.state.get_session("test-session") or "")
-            # Note: We can't easily get session_id from the run, but we verified the flow works
+            # Verify the session was persisted — list_sessions returns at least one entry
+            sessions = agent.state.list_sessions()
+            assert len(sessions) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Resume guard tests
+# ---------------------------------------------------------------------------
+
+def _make_agent(tmpdir):
+    """Create an agent with an isolated DB; no API keys needed."""
+    import os
+    os.environ.setdefault("OPENAI_API_KEY", "test-key")
+    os.environ.setdefault("TAVILY_API_KEY", "test-key")
+    db_path = Path(tmpdir) / "test.db"
+    with patch("src.planner.AsyncOpenAI"), patch("src.synthesizer.AsyncOpenAI"):
+        return create_agent(str(db_path))
+
+
+def _seed_session(agent, status: SessionStatus) -> str:
+    """Insert a minimal session with one pending task into the DB."""
+    import uuid
+    session_id = str(uuid.uuid4())
+    session = AgentSession(session_id=session_id, goal="test goal", status=status)
+    agent.state.create_session(session)
+    task = Task(id="task-1", description="do something", dependencies=[])
+    agent.state.save_task(session_id, task)
+    return session_id
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_cancelled_session():
+    """resume() must raise ValueError for CANCELLED sessions."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        session_id = _seed_session(agent, SessionStatus.CANCELLED)
+        with pytest.raises(ValueError, match="cannot be resumed"):
+            await agent.resume(session_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_planning_session():
+    """resume() must raise ValueError for PLANNING sessions (plan never confirmed)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        session_id = _seed_session(agent, SessionStatus.PLANNING)
+        with pytest.raises(ValueError, match="cannot be resumed"):
+            await agent.resume(session_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_completed_session():
+    """resume() must raise ValueError for COMPLETED sessions (existing behaviour)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        session_id = _seed_session(agent, SessionStatus.COMPLETED)
+        with pytest.raises(ValueError, match="already completed"):
+            await agent.resume(session_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_resets_failed_tasks_and_executes():
+    """resume() must reset FAILED tasks to PENDING and then execute them."""
+    import uuid
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+
+        # Seed a FAILED session with one FAILED task
+        session_id = str(uuid.uuid4())
+        session = AgentSession(session_id=session_id, goal="test goal", status=SessionStatus.FAILED)
+        agent.state.create_session(session)
+        task = Task(id="task-1", description="do something", dependencies=[])
+        agent.state.save_task(session_id, task)
+        agent.state.update_task_status(session_id, "task-1", TaskStatus.FAILED, error="network error")
+
+        # Precondition: task is FAILED before resume
+        assert agent.state.get_task(session_id, "task-1").status == TaskStatus.FAILED
+
+        from src.models import ToolResult
+        mock_result = ToolResult(
+            tool_name="web_search",
+            task_id="task-1",
+            success=True,
+            summary="done",
+            full_content="content",
+            metadata={"sources": []},
+        )
+
+        # Side effect marks the task COMPLETED in state (as the real executor would)
+        # so that has_pending_tasks() returns False and the loop terminates.
+        async def fake_execute(sid, t, ctx):
+            agent.state.update_task_status(sid, t.id, TaskStatus.COMPLETED)
+            agent.state.save_tool_result(sid, mock_result)
+            return mock_result
+
+        agent.executor.execute_task = fake_execute
+        agent.synthesizer.synthesize = AsyncMock(return_value="# Report\n\nDone.")
+
+        await agent.resume(session_id)
+
+        # Synthesizer must have been called — confirms the failed task was retried
+        # and produced a result that flowed through to synthesis.
+        agent.synthesizer.synthesize.assert_called_once()
+        synthesize_args = agent.synthesizer.synthesize.call_args[0]
+        # First arg is goal, second is list of ToolResult
+        assert any(r.task_id == "task-1" for r in synthesize_args[1])

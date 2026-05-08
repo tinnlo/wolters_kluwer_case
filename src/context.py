@@ -55,32 +55,6 @@ class ContextManager:
             "recent_results": recent_results_summary,
         }
 
-    def get_context_for_synthesis(
-        self, goal: str, all_results: list[ToolResult]
-    ) -> dict[str, Any]:
-        """Build context for final synthesis.
-
-        Args:
-            goal: The research goal
-            all_results: All tool results from the session
-
-        Returns:
-            Context dictionary for the synthesizer
-        """
-        return {
-            "goal": goal,
-            "num_results": len(all_results),
-            "results": [
-                {
-                    "task_id": r.task_id,
-                    "tool": r.tool_name,
-                    "summary": r.summary,
-                    "content": r.full_content,
-                }
-                for r in all_results
-            ],
-        }
-
     def _build_task_summary(self, tasks: list[Task]) -> str:
         """Build a summary of all tasks and their status.
 

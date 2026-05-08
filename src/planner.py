@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from .models import ResearchPlan, Task
@@ -15,14 +15,14 @@ class Planner:
 
     def __init__(self, api_key: str | None = None):
         """Initialize planner with OpenAI client."""
-        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4o"  # Using gpt-4o as gpt-5.4 is not available yet
+        self.client = AsyncOpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        self.model = os.getenv("OPENAI_MODEL", "gpt-5.1")
 
         # Load planning prompt
         prompt_path = os.path.join(
             os.path.dirname(__file__), "prompts", "planner.txt"
         )
-        with open(prompt_path, "r") as f:
+        with open(prompt_path, "r", encoding="utf-8") as f:
             self.system_prompt = f.read()
 
     async def create_plan(self, goal: str) -> ResearchPlan:
@@ -71,7 +71,7 @@ class Planner:
             }
 
             # Call OpenAI API with structured output
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
@@ -100,6 +100,12 @@ class Planner:
                     dependencies=task_data["dependencies"],
                 )
                 tasks.append(task)
+
+            if not tasks:
+                raise ValueError(
+                    "Planner returned an empty task list. "
+                    "The goal may be too vague — try rephrasing it."
+                )
 
             # Validate dependencies
             self._validate_dependencies(tasks)

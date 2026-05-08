@@ -79,7 +79,7 @@ def test_web_search_tool_can_handle():
     """Test web search tool task detection."""
     tool = WebSearchTool(api_key="test-key")
 
-    # Should handle search tasks
+    # WebSearchTool is a catch-all and handles all task types
     task1 = Task(id="t1", description="Search for Python tutorials", dependencies=[])
     assert tool.can_handle(task1)
 
@@ -89,9 +89,12 @@ def test_web_search_tool_can_handle():
     task3 = Task(id="t3", description="Research WebAssembly adoption", dependencies=[])
     assert tool.can_handle(task3)
 
-    # Should not handle non-search tasks
-    task4 = Task(id="t4", description="Calculate the sum", dependencies=[])
-    assert not tool.can_handle(task4)
+    # Also handles tasks that don't use search keywords (catalog, assess, synthesize, etc.)
+    task4 = Task(id="t4", description="Catalog the main trading products", dependencies=[])
+    assert tool.can_handle(task4)
+
+    task5 = Task(id="t5", description="Calculate the sum", dependencies=[])
+    assert tool.can_handle(task5)
 
 
 def test_web_search_tool_extract_query():
@@ -102,6 +105,12 @@ def test_web_search_tool_extract_query():
     assert tool._extract_query("Search for Python tutorials") == "python tutorials"
     assert tool._extract_query("Find information about AI") == "information about ai"
     assert tool._extract_query("WebAssembly adoption") == "webassembly adoption"
+
+    # Queries longer than _MAX_QUERY_LEN must be truncated at a word boundary
+    long_desc = "compare trading fees " + ("word " * 100)  # well over 400 chars
+    result = tool._extract_query(long_desc)
+    assert len(result) <= tool._MAX_QUERY_LEN
+    assert not result.endswith(" ")  # no trailing space from word-boundary cut
 
 
 @pytest.mark.asyncio
@@ -145,6 +154,15 @@ async def test_web_search_tool_execute_success():
         assert "2 results" in result.summary
         assert len(result.metadata["sources"]) == 2
         assert "Test Result 1" in result.full_content
+
+        # Each source must be a dict with 'url' and 'title' keys so the
+        # synthesizer can build a faithful titled reference list.
+        for src in result.metadata["sources"]:
+            assert isinstance(src, dict), "source must be a dict, not a plain URL string"
+            assert "url" in src
+            assert "title" in src
+        assert result.metadata["sources"][0]["title"] == "Test Result 1"
+        assert result.metadata["sources"][0]["url"] == "https://example.com/1"
 
 
 @pytest.mark.asyncio
