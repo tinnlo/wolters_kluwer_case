@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from .cli import CLI
 from .context import ContextManager
@@ -42,11 +43,12 @@ class Agent:
         self.context = context_manager
         self.cli = cli
 
-    async def run(self, goal: str) -> str:
+    async def run(self, goal: str, auto_approve: bool = False) -> str:
         """Run the complete agent loop.
 
         Args:
             goal: The research goal
+            auto_approve: If True, automatically approve plans without user confirmation
 
         Returns:
             Final synthesized report
@@ -64,27 +66,89 @@ class Agent:
         self.state.create_session(session)
         self._log(session_id, "INFO", "Agent", f"Started session: {session_id}")
 
+        # Display session ID to user
+        self.cli.show_info(f"Session ID: {session_id}")
+        self.cli.show_info("(Press Ctrl+C to pause, then resume with: python main.py --resume <session-id>)")
+        self.cli.console.print()
+
         try:
-            # Phase 1: Planning
+            # Phase 1: Planning (with refinement loop)
             self.cli.show_info("Phase 1: Planning")
-            plan = await self.planner.create_plan(goal)
+            plan = None
+            feedback = None
+            max_refinements = 3
+            refinement_count = 0
+            approved = False
+
+            # Generate initial plan
+            plan = await self.planner.create_plan(goal, feedback)
 
             # Save plan
             self.state.update_session(session_id, plan=plan, status=SessionStatus.PLANNING)
 
             # Save tasks
-            for task in plan.tasks:
-                self.state.save_task(session_id, task)
+            for t in plan.tasks:
+                self.state.save_task(session_id, t)
 
             self._log(
                 session_id, "INFO", "Planner", f"Created plan with {len(plan.tasks)} tasks"
             )
 
             # Display plan and get confirmation
-            if not self.cli.display_plan(plan):
-                self.cli.show_warning("Plan rejected by user")
+            approved, user_feedback = self.cli.display_plan(plan, auto_approve=auto_approve)
+
+            if not approved and user_feedback:
+                feedback = user_feedback
+                self._log(
+                    session_id, "INFO", "Planner", f"User requested plan revision: {feedback}"
+                )
+            elif not approved:
+                # User rejected without feedback
+                self.cli.show_warning("Plan rejected by user without feedback")
                 self.state.update_session(session_id, status=SessionStatus.CANCELLED)
                 return "Research cancelled by user"
+
+            # Refinement loop
+            while not approved and refinement_count < max_refinements:
+                refinement_count += 1
+                self.cli.show_info(f"Refining plan based on your feedback (attempt {refinement_count}/{max_refinements})...")
+
+                plan = await self.planner.create_plan(goal, feedback)
+
+                # Save plan
+                self.state.update_session(session_id, plan=plan, status=SessionStatus.PLANNING)
+
+                # Replace all tasks (deletes stale tasks from rejected plans)
+                self.state.replace_session_tasks(session_id, plan.tasks)
+
+                self._log(
+                    session_id, "INFO", "Planner", f"Refined plan with {len(plan.tasks)} tasks"
+                )
+
+                # Display plan and get confirmation
+                approved, user_feedback = self.cli.display_plan(plan, auto_approve=auto_approve)
+
+                if approved:
+                    break
+
+                if user_feedback:
+                    feedback = user_feedback
+                    self._log(
+                        session_id, "INFO", "Planner", f"User requested plan revision: {feedback}"
+                    )
+                else:
+                    # User rejected without feedback
+                    self.cli.show_warning("Plan rejected by user without feedback")
+                    self.state.update_session(session_id, status=SessionStatus.CANCELLED)
+                    return "Research cancelled by user"
+
+            if refinement_count >= max_refinements and not approved:
+                self.cli.show_warning(f"Maximum plan refinement attempts ({max_refinements}) reached")
+                self.state.update_session(session_id, status=SessionStatus.CANCELLED)
+                return "Research cancelled: could not agree on a plan"
+
+            if not plan:
+                raise ValueError("No plan was generated")
 
             # Phase 2: Execution
             self.cli.show_info("\nPhase 2: Execution")
@@ -119,6 +183,9 @@ class Agent:
                                 f"Task {blocked_task.id} blocked by failed dependencies",
                             )
                     break
+
+                # Task is guaranteed to be non-None here (mypy type narrowing)
+                assert task is not None
 
                 # Show progress
                 self.cli.show_task_progress(task, "starting")
@@ -188,9 +255,11 @@ class Agent:
 
             # Show summary
             all_tasks = self.state.get_session_tasks(session_id)
-            session = self.state.get_session(session_id)
-            if session:
-                self.cli.show_session_summary(session, all_tasks)
+            final_session = self.state.get_session(session_id)
+            if final_session:
+                self.cli.show_session_summary(final_session, all_tasks)
+            else:
+                self.cli.show_warning("Session not found for summary display")
 
             return final_report
 
@@ -200,7 +269,13 @@ class Agent:
             self.cli.show_error(f"Agent execution failed: {str(e)}")
             raise
 
-    def _log(self, session_id: str, level: str, component: str, message: str) -> None:
+    def _log(
+        self,
+        session_id: str,
+        level: Literal["INFO", "WARNING", "ERROR"],
+        component: str,
+        message: str,
+    ) -> None:
         """Add a log entry.
 
         Args:
@@ -221,9 +296,10 @@ class Agent:
     async def resume(self, session_id: str) -> str:
         """Resume an interrupted session from where it left off.
 
-        Only tasks that are still PENDING (or were IN_PROGRESS when the
-        session was interrupted) will be re-executed.  Completed tasks and
-        their stored results are reused as-is for the final synthesis.
+        Sessions can be resumed from any phase:
+        - PLANNING: Continue plan refinement and approval
+        - EXECUTING/SYNTHESIZING: Re-execute pending/failed tasks
+        - FAILED: Retry from where it failed
 
         Args:
             session_id: ID of the session to resume
@@ -232,7 +308,7 @@ class Agent:
             Final synthesized report
 
         Raises:
-            ValueError: If the session does not exist or is already completed
+            ValueError: If the session does not exist or is already completed/cancelled
         """
         session = self.state.get_session(session_id)
         if not session:
@@ -240,44 +316,118 @@ class Agent:
         if session.status == SessionStatus.COMPLETED:
             raise ValueError(
                 f"Session {session_id} is already completed. "
-                "Load the stored report instead of re-running."
+                "Use --view to display the stored report."
             )
-        if session.status in (SessionStatus.CANCELLED, SessionStatus.PLANNING):
+        if session.status == SessionStatus.CANCELLED:
             raise ValueError(
-                f"Session {session_id} has status '{session.status.value}' and cannot be "
-                "resumed. CANCELLED sessions were rejected by the user; PLANNING sessions "
-                "never finished plan confirmation. Start a new session instead."
+                f"Session {session_id} was cancelled by the user. "
+                "Start a new session instead."
             )
 
         self._log(session_id, "INFO", "Agent", f"Resuming session: {session_id}")
         self.cli.show_info(f"Resuming session {session_id} (goal: {session.goal})")
 
-        # Reset IN_PROGRESS and FAILED tasks to PENDING so they are retried.
-        # IN_PROGRESS tasks were interrupted mid-execution (e.g. process killed).
-        # FAILED tasks failed due to transient errors (network, API timeout) and
-        # are safe to retry; their dependencies may now be completable.
-        all_tasks = self.state.get_session_tasks(session_id)
-        for task in all_tasks:
-            if task.status in (TaskStatus.IN_PROGRESS, TaskStatus.FAILED):
-                # Clear any partially-saved tool results before retrying.
-                # An IN_PROGRESS task may have written a result to the DB
-                # (via save_tool_result) before the process died or the
-                # status was updated.  Keeping that stale result would cause
-                # synthesis to see two results for the same task — the old
-                # partial one plus the new retry — duplicating evidence and
-                # inflating citations.
-                self.state.delete_tool_results_for_task(session_id, task.id)
-                self.state.update_task_status(session_id, task.id, TaskStatus.PENDING)
-                self._log(
-                    session_id,
-                    "WARNING",
-                    "Agent",
-                    f"Resetting {task.status.value} task {task.id} to PENDING for retry",
-                )
-
         goal = session.goal
 
         try:
+            # If session was interrupted during planning, continue plan refinement
+            if session.status == SessionStatus.PLANNING:
+                self.cli.show_info("\nResuming Phase 1: Planning")
+
+                # Get existing plan if any
+                plan = session.plan
+                feedback = None
+                max_refinements = 3
+                refinement_count = 0
+                approved = False
+
+                # If there's already a plan, show it for approval
+                if plan:
+                    self.cli.show_info("Showing previously generated plan...")
+                    approved, user_feedback = self.cli.display_plan(plan)
+
+                    if approved:
+                        # User approved the existing plan, proceed to execution
+                        pass
+                    elif user_feedback:
+                        # User wants to refine the plan
+                        feedback = user_feedback
+                    else:
+                        # User rejected without feedback
+                        self.cli.show_warning("Plan rejected by user without feedback")
+                        self.state.update_session(session_id, status=SessionStatus.CANCELLED)
+                        return "Research cancelled by user"
+                else:
+                    # No plan exists yet, generate one
+                    self.cli.show_info("No plan found. Generating initial plan...")
+                    plan = await self.planner.create_plan(goal)
+                    self.state.update_session(session_id, plan=plan, status=SessionStatus.PLANNING)
+
+                    # Save tasks
+                    for t in plan.tasks:
+                        self.state.save_task(session_id, t)
+
+                    self._log(session_id, "INFO", "Planner", f"Created plan with {len(plan.tasks)} tasks")
+
+                    # Show plan for approval
+                    approved, user_feedback = self.cli.display_plan(plan)
+
+                    if not approved and user_feedback:
+                        feedback = user_feedback
+                    elif not approved:
+                        self.cli.show_warning("Plan rejected by user without feedback")
+                        self.state.update_session(session_id, status=SessionStatus.CANCELLED)
+                        return "Research cancelled by user"
+
+                # Continue refinement loop if needed
+                while not approved and refinement_count < max_refinements:
+                    refinement_count += 1
+                    self.cli.show_info(f"Refining plan based on your feedback (attempt {refinement_count}/{max_refinements})...")
+
+                    plan = await self.planner.create_plan(goal, feedback)
+                    self.state.update_session(session_id, plan=plan, status=SessionStatus.PLANNING)
+
+                    # Replace all tasks to prevent stale task execution
+                    self.state.replace_session_tasks(session_id, plan.tasks)
+
+                    self._log(session_id, "INFO", "Planner", f"Refined plan with {len(plan.tasks)} tasks")
+
+                    approved, user_feedback = self.cli.display_plan(plan)
+
+                    if approved:
+                        break
+
+                    if user_feedback:
+                        feedback = user_feedback
+                        self._log(session_id, "INFO", "Planner", f"User requested plan revision: {feedback}")
+                    else:
+                        self.cli.show_warning("Plan rejected by user without feedback")
+                        self.state.update_session(session_id, status=SessionStatus.CANCELLED)
+                        return "Research cancelled by user"
+
+                if refinement_count >= max_refinements and not approved:
+                    self.cli.show_warning(f"Maximum plan refinement attempts ({max_refinements}) reached")
+                    self.state.update_session(session_id, status=SessionStatus.CANCELLED)
+                    return "Research cancelled: could not agree on a plan"
+
+                if not plan:
+                    raise ValueError("No plan was generated")
+
+            # If session was interrupted during execution or synthesis, reset failed/in-progress tasks
+            else:
+                # Reset IN_PROGRESS and FAILED tasks to PENDING so they are retried.
+                all_tasks = self.state.get_session_tasks(session_id)
+                for existing_task in all_tasks:
+                    if existing_task.status in (TaskStatus.IN_PROGRESS, TaskStatus.FAILED):
+                        self.state.delete_tool_results_for_task(session_id, existing_task.id)
+                        self.state.update_task_status(session_id, existing_task.id, TaskStatus.PENDING)
+                        self._log(
+                            session_id,
+                            "WARNING",
+                            "Agent",
+                            f"Resetting {existing_task.status.value} task {existing_task.id} to PENDING for retry",
+                        )
+
             # Phase 2 (resumed): Execution
             self.cli.show_info("\nResuming Phase 2: Execution")
             self.state.update_session(session_id, status=SessionStatus.EXECUTING)
@@ -300,6 +450,9 @@ class Agent:
                                 error="Blocked by failed dependencies",
                             )
                     break
+
+                # Task is guaranteed to be non-None here (mypy type narrowing)
+                assert task is not None
 
                 self.cli.show_task_progress(task, "starting")
                 all_tasks = self.state.get_session_tasks(session_id)
@@ -369,9 +522,9 @@ def create_agent(db_path: str = "data/sessions.db") -> Agent:
     # Initialize components
     state = StateManager(db_path)
     planner = Planner()
-    synthesizer = Synthesizer()
-    context_manager = ContextManager()
     cli = CLI()
+    synthesizer = Synthesizer(cli=cli)
+    context_manager = ContextManager()
 
     # Setup tool registry
     registry = ToolRegistry()

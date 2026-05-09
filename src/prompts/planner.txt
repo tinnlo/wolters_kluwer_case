@@ -33,9 +33,19 @@ Bad Plan:
 - task-2: Find information (not specific)
 - task-3: Look at websites (no clear objective)
 
+HANDLING USER FEEDBACK:
+When user provides feedback on a previous plan:
+- Carefully read and understand their concerns or suggestions
+- Address specific issues they raised (e.g., "too broad", "missing X", "focus more on Y")
+- Adjust task scope, add/remove tasks, or reorder as needed
+- Maintain the same quality standards (specific, actionable, logical dependencies)
+- If they want more depth, add more granular tasks
+- If they want different focus, adjust task descriptions accordingly
+
 IMPORTANT:
 - Be specific about what information to find
 - Ensure tasks can be completed with web search
 - Create logical dependencies (later tasks can build on earlier findings)
 - Aim for comprehensive coverage of the topic
 - Each task should have a clear, measurable outcome
+- When refining based on feedback, show you understood and addressed their concerns

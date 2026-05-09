@@ -2,7 +2,6 @@
 
 import json
 import os
-from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import ValidationError
@@ -25,11 +24,12 @@ class Planner:
         with open(prompt_path, "r", encoding="utf-8") as f:
             self.system_prompt = f.read()
 
-    async def create_plan(self, goal: str) -> ResearchPlan:
+    async def create_plan(self, goal: str, feedback: str | None = None) -> ResearchPlan:
         """Create a structured research plan from a goal.
 
         Args:
             goal: The high-level research objective
+            feedback: Optional user feedback to refine a previous plan
 
         Returns:
             ResearchPlan with structured tasks
@@ -70,15 +70,22 @@ class Planner:
                 },
             }
 
+            # Build user message
+            if feedback:
+                user_message = (
+                    f"Create a research plan for this goal: {goal}\n\n"
+                    f"User feedback on previous plan: {feedback}\n\n"
+                    "Please revise the plan based on this feedback."
+                )
+            else:
+                user_message = f"Create a research plan for this goal: {goal}"
+
             # Call OpenAI API with structured output
-            response = await self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(  # type: ignore[call-overload]
                 model=self.model,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
-                    {
-                        "role": "user",
-                        "content": f"Create a research plan for this goal: {goal}",
-                    },
+                    {"role": "user", "content": user_message},
                 ],
                 response_format=response_format,
                 temperature=0.7,
@@ -136,11 +143,11 @@ class Planner:
             duplicates = [tid for tid in task_ids if task_ids.count(tid) > 1]
             raise ValueError(f"Duplicate task IDs found: {set(duplicates)}")
 
-        task_ids = set(task_ids)
+        task_id_set = set(task_ids)
 
         for task in tasks:
             for dep_id in task.dependencies:
-                if dep_id not in task_ids:
+                if dep_id not in task_id_set:
                     raise ValueError(
                         f"Task {task.id} has invalid dependency: {dep_id}"
                     )

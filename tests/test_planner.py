@@ -1,7 +1,6 @@
 """Tests for the planning system."""
 
 import json
-import os
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
 

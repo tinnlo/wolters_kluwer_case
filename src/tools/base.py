@@ -1,6 +1,7 @@
 """Base tool interface."""
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..models import Task, ToolResult
 
@@ -21,7 +22,7 @@ class Tool(ABC):
         pass
 
     @abstractmethod
-    async def execute(self, task: Task, context: dict) -> ToolResult:
+    async def execute(self, task: Task, context: dict[str, Any]) -> ToolResult:
         """Execute the tool for a given task.
 
         Args:

@@ -51,7 +51,7 @@ class WebSearchTool(Tool):
         """
         return True
 
-    async def execute(self, task: Task, context: dict) -> ToolResult:
+    async def execute(self, task: Task, context: dict[str, Any]) -> ToolResult:
         """Execute web search for the task.
 
         Args:

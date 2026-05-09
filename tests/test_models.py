@@ -1,6 +1,5 @@
 """Tests for data models."""
 
-from datetime import datetime
 
 from src.models import AgentSession, ResearchPlan, Task, TaskStatus, ToolResult
 

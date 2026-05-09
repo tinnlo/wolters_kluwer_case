@@ -9,7 +9,7 @@ from .base import Tool
 class ToolRegistry:
     """Registry for managing available tools."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize empty tool registry."""
         self._tools: dict[str, Tool] = {}
 

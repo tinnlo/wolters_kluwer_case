@@ -52,7 +52,7 @@ async def test_agent_end_to_end(monkeypatch):
         with patch("src.planner.AsyncOpenAI") as mock_planner_openai, \
              patch("src.synthesizer.AsyncOpenAI") as mock_synth_openai, \
              patch("httpx.AsyncClient") as mock_httpx, \
-             patch("src.cli.CLI.display_plan", return_value=True), \
+             patch("src.cli.CLI.display_plan", return_value=(True, None)), \
              patch("src.cli.CLI.get_research_goal", return_value="Test goal"):
 
             # Setup OpenAI mocks (AsyncOpenAI — create must be an AsyncMock)
@@ -120,18 +120,40 @@ async def test_resume_rejects_cancelled_session():
     with tempfile.TemporaryDirectory() as tmpdir:
         agent = _make_agent(tmpdir)
         session_id = _seed_session(agent, SessionStatus.CANCELLED)
-        with pytest.raises(ValueError, match="cannot be resumed"):
+        with pytest.raises(ValueError, match="was cancelled by the user"):
             await agent.resume(session_id)
 
 
 @pytest.mark.asyncio
-async def test_resume_rejects_planning_session():
-    """resume() must raise ValueError for PLANNING sessions (plan never confirmed)."""
+async def test_resume_allows_planning_session():
+    """resume() can now resume PLANNING sessions to continue plan refinement."""
+    # This test just verifies that PLANNING sessions don't raise ValueError anymore
+    # Full integration testing would require mocking user input which is complex
     with tempfile.TemporaryDirectory() as tmpdir:
         agent = _make_agent(tmpdir)
         session_id = _seed_session(agent, SessionStatus.PLANNING)
-        with pytest.raises(ValueError, match="cannot be resumed"):
-            await agent.resume(session_id)
+
+        # Store a plan in the session
+        test_plan = ResearchPlan(
+            goal="test goal",
+            tasks=[Task(id="task-1", description="test task", dependencies=[])]
+        )
+        agent.state.update_session(session_id, plan=test_plan)
+        agent.state.save_task(session_id, test_plan.tasks[0])
+
+        # Verify that calling resume doesn't raise ValueError for PLANNING status
+        # We'll mock display_plan to immediately approve and avoid hanging
+        with patch.object(agent.cli, 'show_info'), \
+             patch.object(agent.cli, 'show_warning'), \
+             patch.object(agent.cli, 'display_plan') as mock_display:
+
+            # Simulate user rejecting without feedback to trigger early return
+            mock_display.return_value = (False, None)
+
+            result = await agent.resume(session_id)
+
+            # Should return cancellation message, not raise ValueError
+            assert "cancelled" in result.lower()
 
 
 @pytest.mark.asyncio

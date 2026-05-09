@@ -5,6 +5,20 @@ from typing import Any
 from .models import Task, ToolResult
 
 
+def estimate_tokens(text: str) -> int:
+    """Estimate token count for text using simple heuristic.
+
+    Args:
+        text: Text to estimate tokens for
+
+    Returns:
+        Estimated token count (minimum 1 for non-empty text)
+    """
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
 class ContextManager:
     """Manages context for LLM prompts to avoid token overflow."""
 

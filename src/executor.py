@@ -1,5 +1,7 @@
 """Task executor that dispatches tasks to appropriate tools."""
 
+from typing import Any
+
 from .models import Task, TaskStatus, ToolResult
 from .state import StateManager
 from .tools import ToolRegistry
@@ -19,7 +21,7 @@ class Executor:
         self.state = state
 
     async def execute_task(
-        self, session_id: str, task: Task, context: dict
+        self, session_id: str, task: Task, context: dict[str, Any]
     ) -> ToolResult:
         """Execute a single task.
 

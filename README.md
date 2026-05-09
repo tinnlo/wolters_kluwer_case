@@ -44,8 +44,33 @@ See [docs/RUNNING.md](docs/RUNNING.md) for full installation and CLI reference.
 # List past sessions
 python main.py --list-sessions
 
+# View a completed session's report
+python main.py --view <session-id>
+
 # Resume an interrupted session
 python main.py --resume <session-id>
+
+# Run with automatic plan approval (non-interactive)
+python main.py --auto-approve "Research the current state of WebAssembly adoption"
+
+# Show help and usage
+python main.py --help
+```
+
+**To pause and resume a session:**
+1. Press `Ctrl+C` during execution (session ID is shown at start)
+2. Use `--list-sessions` to find the session ID if needed
+3. Use `--resume <session-id>` to continue from where you left off
+
+**Non-interactive execution:**
+Use `--auto-approve` to automatically approve the generated plan without user confirmation. Useful for automated workflows, CI/CD, or generating transcripts programmatically.
+
+**Regenerating transcripts:**
+To generate a markdown transcript from any completed session:
+```bash
+python generate_transcript.py <session-id> [output-file]
+# Example:
+python generate_transcript.py 33389d05-6a93-4493-8135-94f760e677cf examples/transcript_webassembly.md
 ```
 
 ---
@@ -53,7 +78,7 @@ python main.py --resume <session-id>
 ## Tests
 
 ```bash
-python -m pytest tests/ -v   # 51 tests, all offline (no API calls)
+python -m pytest tests/ -v   # 72 tests, all offline (no API calls)
 ```
 
 ---
@@ -63,9 +88,22 @@ python -m pytest tests/ -v   # 51 tests, all offline (no API calls)
 | Document | Contents |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component map, data models, SQLite schema, design invariants |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | **Context strategy, evaluation scenarios, trade-offs** |
 | [docs/RUNNING.md](docs/RUNNING.md) | Prerequisites, install, CLI usage, test commands |
 | [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) | End-to-end trace: goal → plan → execute → synthesise |
-| [examples/transcript_webassembly.md](examples/transcript_webassembly.md) | Annotated real run transcript |
+| [examples/transcript_webassembly.md](examples/transcript_webassembly.md) | Real session transcript from live API calls |
+
+---
+
+## Context Management Strategy
+
+The agent uses a **two-tier context approach** to balance detail preservation with token efficiency:
+
+**During execution** (`ContextManager`): Maintains a rolling window of the last 5 tool result summaries. This prevents unbounded token growth during long sessions while keeping recent findings accessible to each new task.
+
+**During synthesis** (`Synthesizer`): Enforces a hard token budget cap (default 100K) that accounts for system prompt, sources, and all task results. Results are included greedily (full content first) while budget allows. When budget is exhausted, the loop terminates and remaining results are omitted (logged to CLI). This prevents context overflow.
+
+See [docs/EVALUATION.md](docs/EVALUATION.md) for detailed context strategy, evaluation scenarios, and known trade-offs.
 
 ---
 
@@ -90,9 +128,10 @@ wolters_kluwer_case/
 │   └── prompts/
 │       ├── planner.txt
 │       └── synthesizer.txt
-├── tests/                   51 pytest tests
+├── tests/                   72 pytest tests
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   ├── EVALUATION.md
 │   ├── RUNNING.md
 │   ├── WALKTHROUGH.md
 │   └── wolters_kluwer_case.md   Original take-home brief

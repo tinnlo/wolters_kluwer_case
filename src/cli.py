@@ -40,8 +40,18 @@ class CLI:
 
         return goal
 
-    def display_plan(self, plan: ResearchPlan) -> bool:
-        """Display the research plan and get user confirmation."""
+    def display_plan(self, plan: ResearchPlan, auto_approve: bool = False) -> tuple[bool, str | None]:
+        """Display the research plan and get user confirmation.
+
+        Args:
+            plan: The research plan to display
+            auto_approve: If True, automatically approve without prompting
+
+        Returns:
+            Tuple of (approved, feedback) where:
+            - approved: True if user approves, False if they want changes
+            - feedback: User's feedback for plan improvement (None if approved)
+        """
         self.console.print("\n[bold green]✓ Research Plan Generated[/bold green]\n")
 
         # Create table for tasks
@@ -56,11 +66,28 @@ class CLI:
 
         self.console.print(table)
 
+        # Auto-approve if flag is set
+        if auto_approve:
+            self.console.print("\n[bold green]✓ Plan automatically approved[/bold green]")
+            return (True, None)
+
         # Get confirmation
         self.console.print("\n[bold yellow]Proceed with this plan?[/bold yellow] [dim](yes/no)[/dim]")
         response = self.console.input("[bold cyan]>[/bold cyan] ").strip().lower()
 
-        return response in ["yes", "y"]
+        if response in ["yes", "y"]:
+            return (True, None)
+
+        # Ask for feedback
+        self.console.print("\n[bold yellow]What would you like to change?[/bold yellow]")
+        self.console.print("[dim]Describe your concerns or suggestions for improving the plan:[/dim]\n")
+        feedback = self.console.input("[bold cyan]Feedback:[/bold cyan] ").strip()
+
+        if not feedback:
+            self.console.print("[yellow]No feedback provided. Plan will be cancelled.[/yellow]")
+            return (False, None)
+
+        return (False, feedback)
 
     def show_task_progress(self, task: Task, status: str) -> None:
         """Show task execution progress."""

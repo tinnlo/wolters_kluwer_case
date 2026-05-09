@@ -264,6 +264,44 @@ class StateManager:
             )
             conn.commit()
 
+    def replace_session_tasks(self, session_id: str, tasks: list[Task]) -> None:
+        """Replace all tasks for a session with a new task list.
+
+        Deletes all existing tasks for the session, then inserts the new tasks.
+        Used during plan refinement to ensure stale rejected tasks are removed.
+
+        Args:
+            session_id: The session ID
+            tasks: New task list to save
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            # Delete all existing tasks for this session
+            conn.execute("DELETE FROM tasks WHERE session_id = ?", (session_id,))
+
+            # Insert new tasks
+            for task in tasks:
+                conn.execute(
+                    """
+                    INSERT INTO tasks
+                    (id, session_id, description, status, dependencies_json, tool_name,
+                     result, error, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task.id,
+                        session_id,
+                        task.description,
+                        task.status.value,
+                        json.dumps(task.dependencies),
+                        task.tool_name,
+                        task.result,
+                        task.error,
+                        task.created_at.isoformat(),
+                        task.updated_at.isoformat(),
+                    ),
+                )
+            conn.commit()
+
     def get_task(self, session_id: str, task_id: str) -> Task | None:
         """Retrieve a task by ID."""
         with sqlite3.connect(self.db_path) as conn:
@@ -323,7 +361,7 @@ class StateManager:
                 (session_id, TaskStatus.PENDING.value, TaskStatus.IN_PROGRESS.value),
             )
             count = cursor.fetchone()[0]
-            return count > 0
+            return bool(count > 0)
 
     def get_next_task(self, session_id: str) -> Task | None:
         """Get the next pending task that has all dependencies completed."""

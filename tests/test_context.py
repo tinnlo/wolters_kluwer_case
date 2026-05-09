@@ -1,6 +1,5 @@
 """Tests for the ContextManager."""
 
-import pytest
 
 from src.context import ContextManager
 from src.models import Task, TaskStatus, ToolResult

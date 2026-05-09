@@ -94,7 +94,7 @@ wolters_kluwer_case/
 ├── src/
 │   ├── agent.py            Agent controller: run() and resume() orchestration loops
 │   ├── planner.py          AsyncOpenAI call → ResearchPlan (structured output)
-│   ├── synthesizer.py      AsyncOpenAI call → cited Markdown report
+│   ├── synthesizer.py      AsyncOpenAI call → cited Markdown report (with CLI logging)
 │   ├── executor.py         Task dispatch via ToolRegistry; status transitions
 │   ├── context.py          Rolling-window context builder (last N results)
 │   ├── state.py            SQLite persistence: sessions, tasks, tool_results, logs
@@ -107,7 +107,7 @@ wolters_kluwer_case/
 │   └── prompts/
 │       ├── planner.txt     Planning system prompt
 │       └── synthesizer.txt Synthesis system prompt (instructs inline citations)
-├── tests/                  pytest suite — 51 tests
+├── tests/                  pytest suite — 72 tests
 ├── data/                   SQLite database (created at first run)
 └── examples/               Annotated run transcripts
 ```
@@ -210,9 +210,10 @@ tool results. For each new task it builds a `dict` containing:
 - summaries of the N most recent results
 
 This context is passed to `Executor.execute_task()` and forwarded to the tool. For
-`WebSearchTool` the context informs query refinement. The window prevents token
-growth proportional to session length while preserving the most relevant recent
-findings.
+`WebSearchTool` the context is available but currently unused in query construction
+(a future enhancement could use recent results to avoid duplicate queries or add
+domain context from the goal). The window prevents token growth proportional to
+session length while preserving the most relevant recent findings.
 
 ---
 
@@ -222,36 +223,88 @@ The synthesizer prompt instructs the LLM to use inline `[n]` citations and appen
 `## Sources` section. The source list is built deterministically in
 `Synthesizer._build_context()`:
 
-1. Iterate all `ToolResult.metadata["sources"]` entries.
+1. Iterate `ToolResult.metadata["sources"]` entries for results actually included in the synthesis context (after budget enforcement).
 2. Deduplicate by URL.
 3. Emit a numbered list `[1] Title — URL` before the synthesis instructions.
 
 `metadata["sources"]` may contain either `dict` objects (`{"url": …, "title": …}`) or
 plain URL strings. Both are handled.
 
+### 8.1 Synthesis Progress Logging
+
+The `Synthesizer` accepts an optional `CLI` instance for progress logging during the
+synthesis phase, which typically takes 15-25 seconds. When a CLI is provided, the
+synthesizer displays:
+
+1. **Preparation** — "Preparing N research results for synthesis..."
+2. **Source count** — "Collected N unique sources for citation" (if sources exist)
+3. **API call start** — "Generating comprehensive report using {model}..."
+4. **Post-processing** — "Report generated, validating citations..."
+5. **Completion** — "Synthesis complete"
+
+This provides observability into the synthesis process without requiring the user to
+wait in silence. The CLI parameter is optional; tests instantiate `Synthesizer()`
+without it.
+
+### 8.2 Synthesis Context Budget
+
+The `Synthesizer` enforces a configurable token budget (default 100,000 tokens) to
+prevent context window overflow during synthesis. The budget accounts for:
+
+- System prompt
+- Research goal and instructions
+- Global source list (deduplicated from included results' `metadata["sources"]`)
+- All task results (minimums + full content where budget allows)
+
+**Budget enforcement is a hard cap**: Sources are collected only from results that fit
+within the initial budget estimate. After source collection, if `fixed_tokens + current_tokens`
+exceeds the budget, results are trimmed from the end until the total is under budget.
+This ensures the final prompt never exceeds `input_token_budget`.
+
+**Per-result minimum** (included while budget allows):
+- Task ID, tool name, status (Success/Failed)
+- Summary (capped at 500 characters with `...[summary truncated]` marker if needed)
+- Either sanitized `full_content` OR `[Full content omitted due to synthesis budget]`
+
+**Full content inclusion** (conditional on remaining budget):
+- Inline citations `[n]` are stripped (prevents confusion with global source list)
+- Trailing `## Sources` sections are stripped (authority is the global list only)
+- Content is included if it fits within remaining budget after accounting for the minimum
+- If even the minimum doesn't fit, an ultra-minimal entry is included (task ID + status only)
+- If even ultra-minimal would exceed budget, the loop terminates and remaining results are omitted
+
+The budget is configurable via the `input_token_budget` parameter to `Synthesizer.__init__()`,
+enabling deterministic testing with small budgets (e.g., 2,000 tokens) to trigger
+truncation. Token estimation uses a simple heuristic (4 characters per token) rather
+than a tokenizer library, trading accuracy for speed and zero dependencies.
+
+When truncation occurs, the CLI logs:
+- Total estimated prompt tokens
+- Number of results with full content vs summary-only
+- A warning: "⚠️  Content truncated to fit synthesis budget"
+
+When the budget is exhausted before all results are included, the CLI logs:
+- "⚠️  Synthesis budget exhausted after N/M results. Remaining K results omitted."
+
 ---
 
-## 9. Session Resume
+## 10. Session Resume
 
 `Agent.resume(session_id)`:
 
 1. Loads the existing session. Raises `ValueError` if the session:
    - does not exist,
    - is `COMPLETED` (`"already completed"`), or
-   - is `CANCELLED` or `PLANNING` (`"cannot be resumed"` — plan was never approved
-     for execution, so running it silently would execute user-rejected tasks).
-2. Resets any `IN_PROGRESS` **or `FAILED`** tasks to `PENDING`. `FAILED` tasks are
-   reset because the primary resume use-case is transient network/API failure; without
-   this reset, `--resume` would be a no-op for the most common failure mode.
-3. Re-enters Phase 2 (execution loop) and Phase 3 (synthesis), reusing all `COMPLETED`
-   task results already in `tool_results`.
+   - is `CANCELLED` (`"was cancelled by the user"`)
+2. If status is `PLANNING`, resumes plan refinement and approval flow. If a plan exists, displays it for approval; otherwise generates a new plan.
+3. If status is `EXECUTING`, `SYNTHESIZING`, or `FAILED`, resets any `IN_PROGRESS` **or `FAILED`** tasks to `PENDING`. `FAILED` tasks are reset because the primary resume use-case is transient network/API failure; without this reset, `--resume` would be a no-op for the most common failure mode.
+4. Re-enters the appropriate phase (planning, execution, or synthesis) and continues from where it left off, reusing all `COMPLETED` task results already in `tool_results`.
 
-This allows recovery from network failures, API rate limits, or manual interruption
-without discarding partial work.
+This allows recovery from network failures, API rate limits, or manual interruption without discarding partial work.
 
 ---
 
-## 10. What Was Deliberately Left Out
+## 11. What Was Deliberately Left Out
 
 | Feature | Reason |
 |---|---|
@@ -264,7 +317,7 @@ without discarding partial work.
 
 ---
 
-## 11. Known Gaps
+## 12. Known Gaps
 
 - **Single tool type:** Only `WebSearchTool` is registered. The `ToolRegistry` and
   `Tool` ABC support additional tools; none are implemented beyond the take-home scope.

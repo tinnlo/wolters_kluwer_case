@@ -14,6 +14,8 @@ graph TD
     subgraph PHASE1["Phase 1 · Planning"]
         P["Planner<br>gpt-5.1 → ResearchPlan"]
         CONFIRM{"User confirms?"}
+        FEEDBACK["User provides feedback"]
+        REFINE["Planner refines plan<br>with feedback"]
         CANCEL["Session → CANCELLED"]
     end
 
@@ -29,7 +31,8 @@ graph TD
     end
 
     GOAL --> P --> CONFIRM
-    CONFIRM -- no --> CANCEL
+    CONFIRM -- no --> FEEDBACK --> REFINE --> CONFIRM
+    CONFIRM -- no feedback --> CANCEL
     CONFIRM -- yes --> LOOP
     LOOP --> TASK --> MORE
     MORE -- yes --> LOOP
@@ -42,7 +45,7 @@ graph TD
     classDef cancel    fill:#ffe6e6,stroke:#b30000,stroke-width:1px
 
     class GOAL usernode
-    class P,CONFIRM planning
+    class P,CONFIRM,FEEDBACK,REFINE planning
     class LOOP,TASK,MORE execution
     class SYNTH,REPORT synthesis
     class CANCEL cancel
@@ -123,7 +126,33 @@ Research Plan
 Proceed with this plan? [y/n]:
 ```
 
-The user confirms. The session status advances to `EXECUTING`.
+### 2.1 Plan Refinement Loop
+
+If the user types `n` (no), they are prompted for feedback:
+
+```
+What would you like to change?
+Describe your concerns or suggestions for improving the plan:
+
+Feedback: Add more focus on security aspects and browser compatibility
+```
+
+The planner receives this feedback and generates a revised plan. The user message becomes:
+
+```
+Create a research plan for this goal: Research the current state of WebAssembly adoption
+
+User feedback on previous plan: Add more focus on security aspects and browser compatibility
+
+Please revise the plan based on this feedback.
+```
+
+The refined plan is displayed again for approval. This loop can repeat up to 3 times,
+with each refinement attempt clearly labeled (attempt 1/3, 2/3, 3/3). If the user rejects
+without providing feedback, or if 3 refinement attempts are exhausted, the session is
+cancelled with status `CANCELLED`.
+
+Once approved, the session status advances to `EXECUTING`.
 
 ---
 
@@ -192,6 +221,21 @@ loop finds no eligible pending task, remaining pending tasks are force-failed wi
 
 All six tasks are now `COMPLETED`. The session status advances to `SYNTHESIZING`.
 
+### 4.1 Synthesis Process
+
+The CLI displays progress messages during synthesis to provide visibility into the 15-25 second
+process:
+
+```
+Phase 3: Synthesis
+Preparing 6 research results for synthesis...
+Collected 18 unique sources for citation
+Generating comprehensive report using gpt-5.1...
+[API call in progress]
+Report generated, validating citations...
+Synthesis complete
+```
+
 `StateManager.get_tool_results(session_id)` retrieves all six `ToolResult` objects.
 `Synthesizer.synthesize(goal, successful_results)` builds the synthesis context:
 
@@ -209,7 +253,8 @@ Tool: web_search
 ## Result 2: Task task-2
 ...
 
-# Available Sources (use these for citations)
+# Available Sources — 18 total (ONLY these 18 sources exist)
+CRITICAL: The source list below contains exactly 18 entries numbered [1] through [18]...
 [1] WebAssembly Official Site — https://webassembly.org/
 [2] MDN WebAssembly — https://developer.mozilla.org/en-US/docs/WebAssembly
 [3] Made with WebAssembly — https://madewithwebassembly.com/
@@ -217,8 +262,10 @@ Tool: web_search
 
 # Instructions
 Synthesize the above research results into a comprehensive, well-structured report...
-Use [n] inline citations referencing the source numbers above, and include a ## Sources section.
+Use [n] inline citations where n is between 1 and 18 (inclusive)...
 ```
+
+### 4.2 Report Generation
 
 gpt-5.1 receives this context with the synthesis system prompt and returns a Markdown
 report with inline citations like:
@@ -234,8 +281,16 @@ in production deployments...
 ...
 ```
 
-The report is saved to `sessions.final_report` in SQLite and the session status is set to
-`COMPLETED`.
+### 4.3 Citation Validation
+
+After receiving the report, the synthesizer validates citations:
+
+1. Counts how many sources the LLM actually listed in its `## Sources` section
+2. Removes any `[n]` citations in the body where `n` exceeds the emitted source count
+3. This prevents dangling references to non-existent sources
+
+The validated report is saved to `sessions.final_report` in SQLite and the session status
+is set to `COMPLETED`.
 
 ---
 
@@ -264,11 +319,12 @@ python main.py --resume abc123-example
 
 `Agent.resume("abc123-example")` would:
 
-1. Load the session; reject if status is `COMPLETED`, `CANCELLED`, or `PLANNING`.
-2. Reset any `IN_PROGRESS` or `FAILED` tasks to `PENDING` (so they are retried).
-3. Skip tasks 1–3 (already `COMPLETED`).
-4. Execute tasks 4, 5, and 6 (still `PENDING`).
-5. Retrieve all six `ToolResult` objects (including the three from the earlier run) and
+1. Load the session; reject if status is `COMPLETED` or `CANCELLED`.
+2. If status is `PLANNING`, resume plan refinement and approval flow.
+3. Otherwise, reset any `IN_PROGRESS` or `FAILED` tasks to `PENDING` (so they are retried).
+4. Skip tasks 1–3 (already `COMPLETED`).
+5. Execute tasks 4, 5, and 6 (still `PENDING`).
+6. Retrieve all six `ToolResult` objects (including the three from the earlier run) and
    synthesise the full report.
 
 The final report is identical to a complete run — partial results are not discarded.
@@ -282,12 +338,14 @@ graph TD
 
     subgraph GUARDS["Guard checks"]
         G1{"status ==<br>COMPLETED?"}
-        G2{"status == CANCELLED<br>or PLANNING?"}
+        G2{"status ==<br>CANCELLED?"}
+        G3{"status ==<br>PLANNING?"}
         ERR1["ValueError<br>already completed"]
         ERR2["ValueError<br>cannot be resumed"]
     end
 
     subgraph RESUME["Resume execution"]
+        PLAN_RESUME["Continue planning<br>refinement"]
         RESET["Reset IN_PROGRESS + FAILED<br>tasks → PENDING"]
         SKIP["Skip COMPLETED tasks<br>(reuse stored results)"]
         EXEC["Execute remaining<br>PENDING tasks"]
@@ -299,7 +357,9 @@ graph TD
     G1 -- yes --> ERR1
     G1 -- no --> G2
     G2 -- yes --> ERR2
-    G2 -- no --> RESET --> SKIP --> EXEC --> SYNTH --> DONE
+    G2 -- no --> G3
+    G3 -- yes --> PLAN_RESUME
+    G3 -- no --> RESET --> SKIP --> EXEC --> SYNTH --> DONE
 
     classDef entrynode  fill:#e8eaf6,stroke:#3949ab,stroke-width:2px
     classDef guard      fill:#fff3cd,stroke:#b8860b,stroke-width:1px
@@ -307,9 +367,9 @@ graph TD
     classDef resume     fill:#d4edda,stroke:#155724,stroke-width:1px
 
     class R,LOAD entrynode
-    class G1,G2 guard
+    class G1,G2,G3 guard
     class ERR1,ERR2 error
-    class RESET,SKIP,EXEC,SYNTH,DONE resume
+    class PLAN_RESUME,RESET,SKIP,EXEC,SYNTH,DONE resume
 
     style ENTRY  fill:transparent,stroke:#999,stroke-width:1px,stroke-dasharray:4 4
     style GUARDS fill:transparent,stroke:#999,stroke-width:1px,stroke-dasharray:4 4
