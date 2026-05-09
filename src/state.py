@@ -93,6 +93,23 @@ class StateManager:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _row_to_session(row: sqlite3.Row) -> AgentSession:
+        """Build an AgentSession from a database row."""
+        return AgentSession(
+            session_id=row["session_id"],
+            goal=row["goal"],
+            plan=ResearchPlan.model_validate_json(row["plan_json"])
+            if row["plan_json"]
+            else None,
+            final_report=row["final_report"],
+            status=row["status"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            completed_at=datetime.fromisoformat(row["completed_at"])
+            if row["completed_at"]
+            else None,
+        )
+
+    @staticmethod
     def _row_to_task(row: sqlite3.Row) -> Task:
         """Build a Task from a database row."""
         return Task(
@@ -123,6 +140,29 @@ class StateManager:
     # ------------------------------------------------------------------
     # Sessions
     # ------------------------------------------------------------------
+
+    def _insert_task(self, conn: sqlite3.Connection, session_id: str, task: Task) -> None:
+        """Insert or replace a task row using the existing schema."""
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO tasks
+            (id, session_id, description, status, dependencies_json, tool_name,
+             result, error, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task.id,
+                session_id,
+                task.description,
+                task.status.value,
+                json.dumps(task.dependencies),
+                task.tool_name,
+                task.result,
+                task.error,
+                task.created_at.isoformat(),
+                task.updated_at.isoformat(),
+            ),
+        )
 
     def create_session(self, session: AgentSession) -> None:
         """Create a new session."""
@@ -195,19 +235,7 @@ class StateManager:
             if not row:
                 return None
 
-            return AgentSession(
-                session_id=row["session_id"],
-                goal=row["goal"],
-                plan=ResearchPlan.model_validate_json(row["plan_json"])
-                if row["plan_json"]
-                else None,
-                final_report=row["final_report"],
-                status=row["status"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                completed_at=datetime.fromisoformat(row["completed_at"])
-                if row["completed_at"]
-                else None,
-            )
+            return self._row_to_session(row)
 
     def list_sessions(self) -> list[AgentSession]:
         """List all sessions ordered by creation time descending."""
@@ -216,24 +244,7 @@ class StateManager:
             cursor = conn.execute(
                 "SELECT * FROM sessions ORDER BY created_at DESC"
             )
-            sessions = []
-            for row in cursor.fetchall():
-                sessions.append(
-                    AgentSession(
-                        session_id=row["session_id"],
-                        goal=row["goal"],
-                        plan=ResearchPlan.model_validate_json(row["plan_json"])
-                        if row["plan_json"]
-                        else None,
-                        final_report=row["final_report"],
-                        status=row["status"],
-                        created_at=datetime.fromisoformat(row["created_at"]),
-                        completed_at=datetime.fromisoformat(row["completed_at"])
-                        if row["completed_at"]
-                        else None,
-                    )
-                )
-            return sessions
+            return [self._row_to_session(row) for row in cursor.fetchall()]
 
     # ------------------------------------------------------------------
     # Tasks
@@ -242,26 +253,7 @@ class StateManager:
     def save_task(self, session_id: str, task: Task) -> None:
         """Save or update a task."""
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO tasks
-                (id, session_id, description, status, dependencies_json, tool_name,
-                 result, error, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task.id,
-                    session_id,
-                    task.description,
-                    task.status.value,
-                    json.dumps(task.dependencies),
-                    task.tool_name,
-                    task.result,
-                    task.error,
-                    task.created_at.isoformat(),
-                    task.updated_at.isoformat(),
-                ),
-            )
+            self._insert_task(conn, session_id, task)
             conn.commit()
 
     def replace_session_tasks(self, session_id: str, tasks: list[Task]) -> None:
@@ -280,26 +272,7 @@ class StateManager:
 
             # Insert new tasks
             for task in tasks:
-                conn.execute(
-                    """
-                    INSERT INTO tasks
-                    (id, session_id, description, status, dependencies_json, tool_name,
-                     result, error, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        task.id,
-                        session_id,
-                        task.description,
-                        task.status.value,
-                        json.dumps(task.dependencies),
-                        task.tool_name,
-                        task.result,
-                        task.error,
-                        task.created_at.isoformat(),
-                        task.updated_at.isoformat(),
-                    ),
-                )
+                self._insert_task(conn, session_id, task)
             conn.commit()
 
     def get_task(self, session_id: str, task_id: str) -> Task | None:

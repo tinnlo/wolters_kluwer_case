@@ -107,7 +107,7 @@ wolters_kluwer_case/
 │   └── prompts/
 │       ├── planner.txt     Planning system prompt
 │       └── synthesizer.txt Synthesis system prompt (instructs inline citations)
-├── tests/                  pytest suite — 72 tests
+├── tests/                  pytest suite — 77 tests
 ├── data/                   SQLite database (created at first run)
 └── examples/               Annotated run transcripts
 ```

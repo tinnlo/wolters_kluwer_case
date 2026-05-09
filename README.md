@@ -78,7 +78,7 @@ python generate_transcript.py 33389d05-6a93-4493-8135-94f760e677cf examples/tran
 ## Tests
 
 ```bash
-python -m pytest tests/ -v   # 72 tests, all offline (no API calls)
+python -m pytest tests/ -v   # 77 tests, all offline (no API calls)
 ```
 
 ---

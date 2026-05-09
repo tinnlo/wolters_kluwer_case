@@ -51,6 +51,26 @@ User Input → Planning Agent → TODO List → Execution Agent (with Tools) →
 
 ---
 
+## Implemented Outcome Amendment
+
+This document started as the initial delivery plan. The shipped repository is intentionally narrower in a few places so the final submission stays aligned with the case brief's "small and focused" requirement.
+
+**Delivered scope in the repo:**
+- **Tool path:** Tavily is the only shipped real tool in the core execution path.
+- **Model configuration:** Planning and synthesis use the current `OPENAI_MODEL` setting, with `gpt-5.1` as the default fallback in code.
+- **Execution loop:** Tool dispatch and retry behavior are deterministic Python logic, not an LLM-driven executor.
+- **Persistence/resume:** SQLite-backed resume is included and treated as shipped polish because it strengthens the core `goal -> plan -> execute -> log -> result` flow.
+
+**Deferred ideas from the original plan:**
+- Firecrawl integration
+- Local document reader
+- Code execution tool
+- Broader multi-tool expansion beyond Tavily
+
+These are intentional deferrals, not missing deliverables. For submission review, treat the repository code and README/docs as the source of truth for what was actually built.
+
+---
+
 ## Technology Stack
 
 ### Core Technologies

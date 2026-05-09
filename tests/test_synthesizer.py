@@ -418,13 +418,33 @@ def test_budget_hard_cap_with_source_heavy_results():
             "Included results have sources but no source section in context"
         )
 
-        # Verify source section only includes sources from included results
-        # Each included task has 5 sources, so max sources = 5 * len(included_task_ids)
-        max_expected_sources = 5 * len(included_task_ids)
-        assert source_count <= max_expected_sources, (
-            f"Source section has {source_count} sources but only "
-            f"{len(included_task_ids)} tasks included (max {max_expected_sources} sources)"
+
+def test_build_context_sources_only_for_included_blocks():
+    """The global source list must only include sources from included result blocks."""
+    synth = Synthesizer(api_key="test-key", input_token_budget=1_500)
+    included = make_result(
+        "included",
+        content="short content",
+        sources=[{"url": "https://included.example", "title": "Included"}],
+    )
+    omitted = make_result(
+        "omitted",
+        content="short content",
+        sources=[
+            {
+                "url": f"https://omitted.example/{i}",
+                "title": f"Omitted {i}",
+            }
+                for i in range(200)
+            ],
         )
+
+    ctx, source_count, stats = synth._build_context("Goal", [included, omitted])
+
+    assert stats.total_tokens <= 1_500
+    assert source_count == 1
+    assert "https://included.example" in ctx
+    assert "https://omitted.example/0" not in ctx
 
 
 def test_budget_hard_cap_with_many_source_heavy_results():

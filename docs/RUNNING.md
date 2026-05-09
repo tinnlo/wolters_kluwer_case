@@ -133,9 +133,10 @@ database and rendered with full markdown formatting.
 python main.py --resume <session-id>
 ```
 
-Re-runs only the pending and in-progress tasks from the specified session. Completed tasks
-and their stored results are reused as-is for the final synthesis. Use this after a network
-failure, API timeout, or manual interruption (`Ctrl+C`).
+Re-runs any tasks that are still pending plus any task that was `in_progress` or `failed`
+when the session was interrupted. Completed tasks and their stored results are reused as-is
+for the final synthesis. Use this after a network failure, API timeout, or manual
+interruption (`Ctrl+C`).
 
 **How to pause and resume:**
 
@@ -159,7 +160,7 @@ failure, API timeout, or manual interruption (`Ctrl+C`).
 
 The agent will pick up where it left off:
 - **PLANNING**: Shows the existing plan for your approval. If you reject it, you can provide feedback for refinement.
-- **EXECUTING/SYNTHESIZING**: Re-executes any tasks that were in progress when interrupted.
+- **EXECUTING/SYNTHESIZING/FAILED**: Re-executes any tasks that were in progress or failed when interrupted. Before retrying, any previously saved tool results for those tasks are deleted so synthesis only sees the fresh retry output.
 
 **Note:** Sessions with status `completed` or `cancelled` cannot be resumed. For completed sessions, use `--view` to display the stored report. Use `--list-sessions` to find the session ID.
 
@@ -171,7 +172,7 @@ The agent will pick up where it left off:
 python -m pytest tests/ -v
 ```
 
-Expected output: **72 passed**. All tests are offline (no API calls); OpenAI and Tavily
+Expected output: **77 passed**. All tests are offline (no API calls); OpenAI and Tavily
 clients are patched with `AsyncMock`.
 
 ```bash

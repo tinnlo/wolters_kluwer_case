@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch, AsyncMock
 import pytest
 
 from src.agent import create_agent
-from src.models import AgentSession, ResearchPlan, SessionStatus, Task, TaskStatus
+from src.models import AgentSession, ResearchPlan, SessionStatus, Task, TaskStatus, ToolResult
 
 
 @pytest.mark.asyncio
@@ -184,7 +184,6 @@ async def test_resume_resets_failed_tasks_and_executes():
         # Precondition: task is FAILED before resume
         assert agent.state.get_task(session_id, "task-1").status == TaskStatus.FAILED
 
-        from src.models import ToolResult
         mock_result = ToolResult(
             tool_name="web_search",
             task_id="task-1",
@@ -212,3 +211,100 @@ async def test_resume_resets_failed_tasks_and_executes():
         synthesize_args = agent.synthesizer.synthesize.call_args[0]
         # First arg is goal, second is list of ToolResult
         assert any(r.task_id == "task-1" for r in synthesize_args[1])
+
+
+@pytest.mark.asyncio
+async def test_resume_planning_refinement_replaces_stale_tasks():
+    """Refining a resumed planning session should replace rejected-plan tasks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        session_id = _seed_session(agent, SessionStatus.PLANNING)
+        original_plan = ResearchPlan(
+            goal="test goal",
+            tasks=[Task(id="stale-task", description="stale", dependencies=[])],
+        )
+        agent.state.update_session(session_id, plan=original_plan)
+        agent.state.replace_session_tasks(session_id, original_plan.tasks)
+
+        refined_plan = ResearchPlan(
+            goal="test goal",
+            tasks=[Task(id="fresh-task", description="fresh", dependencies=[])],
+        )
+        agent.planner.create_plan = AsyncMock(return_value=refined_plan)
+
+        with patch.object(agent.cli, "display_plan", side_effect=[(False, "refine it"), (True, None)]), \
+             patch.object(agent.cli, "show_info"), \
+             patch.object(agent.cli, "show_warning"), \
+             patch.object(agent.cli, "display_final_report"), \
+             patch.object(agent.cli, "show_session_summary"):
+            async def fake_execute(sid, current_task, ctx):
+                agent.state.update_task_status(sid, current_task.id, TaskStatus.COMPLETED)
+                result = ToolResult(
+                    tool_name="web_search",
+                    task_id=current_task.id,
+                    success=True,
+                    summary="done",
+                    full_content="content",
+                    metadata={"sources": []},
+                )
+                agent.state.save_tool_result(sid, result)
+                return result
+
+            agent.executor.execute_task = fake_execute
+            agent.synthesizer.synthesize = AsyncMock(return_value="# Report\n\nDone.")
+
+            await agent.resume(session_id)
+
+        task_ids = {task.id for task in agent.state.get_session_tasks(session_id)}
+        assert task_ids == {"fresh-task"}
+        assert agent.state.get_task(session_id, "stale-task") is None
+
+
+@pytest.mark.asyncio
+async def test_resume_retry_deletes_stale_tool_results_before_retry():
+    """Retryable resumes should remove old task results before saving the retry result."""
+    import uuid
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = _make_agent(tmpdir)
+        session_id = str(uuid.uuid4())
+        session = AgentSession(session_id=session_id, goal="test goal", status=SessionStatus.FAILED)
+        agent.state.create_session(session)
+        task = Task(id="task-1", description="do something", dependencies=[])
+        agent.state.save_task(session_id, task)
+        agent.state.update_task_status(session_id, "task-1", TaskStatus.FAILED, error="network error")
+        agent.state.save_tool_result(
+            session_id,
+            ToolResult(
+                tool_name="web_search",
+                task_id="task-1",
+                success=True,
+                summary="stale",
+                full_content="stale content",
+                metadata={"sources": [{"url": "https://stale.example"}]},
+            ),
+        )
+
+        async def fake_execute(sid, current_task, ctx):
+            existing = agent.state.get_tool_results(sid)
+            assert [result.summary for result in existing] == []
+            agent.state.update_task_status(sid, current_task.id, TaskStatus.COMPLETED)
+            fresh = ToolResult(
+                tool_name="web_search",
+                task_id=current_task.id,
+                success=True,
+                summary="fresh",
+                full_content="fresh content",
+                metadata={"sources": [{"url": "https://fresh.example"}]},
+            )
+            agent.state.save_tool_result(sid, fresh)
+            return fresh
+
+        agent.executor.execute_task = fake_execute
+        agent.synthesizer.synthesize = AsyncMock(return_value="# Report\n\nDone.")
+
+        await agent.resume(session_id)
+
+        results = agent.state.get_tool_results(session_id)
+        assert len(results) == 1
+        assert results[0].summary == "fresh"

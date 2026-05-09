@@ -307,7 +307,7 @@ python main.py --resume <session-id>
 Based on git commit timestamps and development log:
 
 - **Initial implementation** (planning, execution, synthesis, SQLite persistence): ~8 hours
-- **Testing and refinement** (72 tests, edge cases, resume logic): ~4 hours
+- **Testing and refinement** (77 tests, edge cases, resume logic): ~4 hours
 - **Context budget hardening** (token estimation, truncation, stats): ~2 hours
 - **Documentation** (ARCHITECTURE.md, RUNNING.md, WALKTHROUGH.md, this file): ~3 hours
 - **Code quality** (ruff, mypy, type annotations): ~1.5 hours

@@ -24,6 +24,24 @@ class SynthesisContextStats:
     omitted_results: int  # results omitted due to budget exhaustion
 
 
+@dataclass
+class ResultBlock:
+    """One included synthesis result block plus its accounting metadata."""
+
+    lines: list[str]
+    tokens: int
+    result_index: int
+    kind: str
+
+
+@dataclass
+class SourceCollection:
+    """Unique sources collected from included result blocks."""
+
+    entries: list[dict[str, Any]]
+    section: str
+
+
 class Synthesizer:
     """Synthesizes research results into coherent final reports."""
 
@@ -142,253 +160,63 @@ class Synthesizer:
         Returns:
             Tuple of (formatted context string, number of unique sources, stats)
         """
-        # Build fixed header
-        header_lines = [
-            f"# Research Goal\n{goal}\n",
-            "# Research Results\n",
-            f"Total tasks completed: {len(results)}\n",
-        ]
-        header = "\n".join(header_lines)
+        header = self._render_header(goal, len(results))
+        initial_fixed = self._estimate_initial_fixed_tokens(header)
+        remaining_budget = self._remaining_budget_for_results(initial_fixed)
 
-        # Calculate budget for system prompt and header
-        system_tokens = estimate_tokens(self.system_prompt)
-        header_tokens = estimate_tokens(header)
-
-        # Reserve budget for instructions (estimated without sources)
-        instruction_base = "\n# Instructions\nSynthesize the above research results into a comprehensive, well-structured report that addresses the research goal."
-        instruction_tokens = estimate_tokens(instruction_base) + 200  # Buffer for citation instructions
-
-        # Initial fixed costs (without sources yet)
-        initial_fixed = system_tokens + header_tokens + instruction_tokens
-
-        # Check if even minimal fixed costs exceed budget
-        if initial_fixed >= self.input_token_budget:
-            raise ValueError(
-                f"Synthesis budget ({self.input_token_budget} tokens) is insufficient "
-                f"for minimal prompt components ({initial_fixed} tokens)."
-            )
-
-        # Remaining budget for results (sources will be added after)
-        remaining_budget = self.input_token_budget - initial_fixed
-
-        # Build results with budget enforcement, tracking which results are included
-        result_blocks: list[tuple[list[str], int, int, str]] = []  # (lines, tokens, result_index, kind)
-        included_result_indices = []  # Track which results made it into context
+        result_blocks: list[ResultBlock] = []
+        included_result_indices: list[int] = []
         results_with_full_content = 0
         results_summary_only = 0
         truncation_occurred = False
         current_tokens = 0
 
         for i, result in enumerate(results, 1):
-            # Per-result minimum (always included)
-            status = "Success" if result.success else "Failed"
-
-            # Cap summary to 500 chars
-            summary = result.summary
-            if len(summary) > 500:
-                summary = summary[:497] + "...[summary truncated]"
+            block, was_truncated = self._build_result_block(result, i, current_tokens, remaining_budget)
+            if block is None:
                 truncation_occurred = True
-
-            minimum_lines = [
-                f"## Result {i}: Task {result.task_id}",
-                f"Tool: {result.tool_name}",
-                f"Status: {status}",
-                f"Summary: {summary}",
-            ]
-
-            # Try to include full content if budget allows
-            content = self._strip_sources_section(result.full_content)
-            content = self._strip_inline_citations(content)
-
-            minimum_text = "\n".join(minimum_lines)
-            minimum_tokens = estimate_tokens(minimum_text)
-            content_tokens = estimate_tokens(content)
-
-            # Check if we can fit full content
-            if current_tokens + minimum_tokens + content_tokens <= remaining_budget:
-                # Include full content
-                block_lines = minimum_lines + [f"\n{content}\n"]
-                block_tokens = minimum_tokens + content_tokens
-                result_blocks.append((block_lines, block_tokens, i - 1, "full"))
-                current_tokens += block_tokens
+                omitted_count = len(results) - (i - 1)
+                if self.cli:
+                    self.cli.show_warning(
+                        f"⚠️  Synthesis budget exhausted after {i-1}/{len(results)} results. "
+                        f"Remaining {omitted_count} results omitted."
+                    )
+                break
+            result_blocks.append(block)
+            current_tokens += block.tokens
+            included_result_indices.append(block.result_index)
+            truncation_occurred = truncation_occurred or was_truncated
+            if block.kind == "full":
                 results_with_full_content += 1
-                included_result_indices.append(i - 1)  # 0-indexed
-            elif current_tokens + minimum_tokens + estimate_tokens("[Full content omitted due to synthesis budget]\n") <= remaining_budget:
-                # Include minimum only
-                block_lines = minimum_lines + ["[Full content omitted due to synthesis budget]\n"]
-                block_tokens = minimum_tokens + estimate_tokens("[Full content omitted due to synthesis budget]\n")
-                result_blocks.append((block_lines, block_tokens, i - 1, "summary"))
-                current_tokens += block_tokens
-                results_summary_only += 1
-                truncation_occurred = True
-                included_result_indices.append(i - 1)  # 0-indexed
             else:
-                # Even minimum doesn't fit - include ultra-minimal entry
-                minimal_lines = [
-                    f"## Result {i}: Task {result.task_id}",
-                    f"Tool: {result.tool_name}",
-                    f"Status: {status}",
-                    "[Summary and content omitted due to synthesis budget]",
-                ]
-                minimal_text = "\n".join(minimal_lines)
-                minimal_tokens = estimate_tokens(minimal_text)
-
-                # Hard cap: if even ultra-minimal would exceed budget, stop
-                if current_tokens + minimal_tokens > remaining_budget:
-                    # We've hit the absolute limit - cannot include more results
-                    truncation_occurred = True
-                    omitted_count = len(results) - (i - 1)
-                    if self.cli:
-                        self.cli.show_warning(
-                            f"⚠️  Synthesis budget exhausted after {i-1}/{len(results)} results. "
-                            f"Remaining {omitted_count} results omitted."
-                        )
-                    break
-
-                result_blocks.append((minimal_lines, minimal_tokens, i - 1, "minimal"))
-                current_tokens += minimal_tokens
                 results_summary_only += 1
-                truncation_occurred = True
-                included_result_indices.append(i - 1)  # 0-indexed
 
-        # Collect sources from initially included results
-        all_sources: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
+        source_collection = self._collect_sources(results, included_result_indices)
+        instructions = self._render_instructions(len(source_collection.entries))
+        fixed_tokens = self._calculate_fixed_tokens(header, source_collection.section, instructions)
 
-        for idx in included_result_indices:
-            result = results[idx]
-            for src in result.metadata.get("sources", []):
-                if isinstance(src, dict):
-                    url = src.get("url", "")
-                    title = src.get("title", url)
-                else:
-                    url = str(src)
-                    title = url
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    all_sources.append({"url": url, "title": title})
-
-        # Build initial source list
-        source_lines = []
-        if all_sources:
-            n = len(all_sources)
-            source_lines.append(f"\n# Available Sources — {n} total (ONLY these {n} sources exist)")
-            source_lines.append(
-                f"CRITICAL: The source list below contains exactly {n} entries numbered "
-                f"[1] through [{n}]. You MUST NOT use any citation number outside this "
-                f"range. Any [n] where n > {n} is invalid and must not appear in your report."
-            )
-            for j, src in enumerate(all_sources, 1):
-                title = src.get("title", "Untitled")
-                url = src.get("url", "")
-                source_lines.append(f"[{j}] {title} — {url}")
-        source_section = "\n".join(source_lines)
-
-        # Build initial instructions
-        instruction_lines = ["\n# Instructions"]
-        if all_sources:
-            n = len(all_sources)
-            instruction_lines.append(
-                "Synthesize the above research results into a comprehensive, "
-                "well-structured report that addresses the research goal. "
-                f"Use [n] inline citations where n is between 1 and {n} (inclusive). "
-                f"NEVER use a citation number greater than {n} — the source list has "
-                f"exactly {n} entries and there are no others. "
-                "Include a ## Sources section at the end listing only the sources you actually cited."
-            )
-        else:
-            instruction_lines.append(
-                "Synthesize the above research results into a comprehensive, "
-                "well-structured report that addresses the research goal. "
-                "No source URLs were collected for this session, so do NOT include "
-                "any inline citations ([n]) or a Sources section in your report."
-            )
-        instructions = "\n".join(instruction_lines)
-
-        # Calculate initial fixed tokens
-        source_tokens = estimate_tokens(source_section)
-        instruction_tokens_actual = estimate_tokens(instructions)
-        fixed_tokens = system_tokens + header_tokens + source_tokens + instruction_tokens_actual
-
-        # HARD CAP ENFORCEMENT: Trim complete results if fixed + current exceeds budget
-        # This can happen because source tokens depend on included results, creating a circular dependency
-        # We recalculate fixed_tokens inside the loop because removing results changes the source list
         while fixed_tokens + current_tokens > self.input_token_budget and result_blocks:
-            # Remove the last complete result block
-            removed_lines, removed_tokens, removed_idx, block_kind = result_blocks.pop()
-            current_tokens -= removed_tokens
-            included_result_indices.remove(removed_idx)
+            removed_block = result_blocks.pop()
+            current_tokens -= removed_block.tokens
+            included_result_indices.remove(removed_block.result_index)
 
-            # Update counters based on stored block kind
-            if block_kind == "full" and results_with_full_content > 0:
+            if removed_block.kind == "full" and results_with_full_content > 0:
                 results_with_full_content -= 1
-            elif block_kind in ("summary", "minimal") and results_summary_only > 0:
+            elif removed_block.kind in ("summary", "minimal") and results_summary_only > 0:
                 results_summary_only -= 1
 
             truncation_occurred = True
-
-            # Rebuild source list from remaining included results
-            all_sources = []
-            seen_urls = set()
-            for idx in included_result_indices:
-                result = results[idx]
-                for src in result.metadata.get("sources", []):
-                    if isinstance(src, dict):
-                        url = src.get("url", "")
-                        title = src.get("title", url)
-                    else:
-                        url = str(src)
-                        title = url
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_sources.append({"url": url, "title": title})
-
-            # Rebuild source section
-            source_lines = []
-            if all_sources:
-                n = len(all_sources)
-                source_lines.append(f"\n# Available Sources — {n} total (ONLY these {n} sources exist)")
-                source_lines.append(
-                    f"CRITICAL: The source list below contains exactly {n} entries numbered "
-                    f"[1] through [{n}]. You MUST NOT use any citation number outside this "
-                    f"range. Any [n] where n > {n} is invalid and must not appear in your report."
-                )
-                for j, src in enumerate(all_sources, 1):
-                    title = src.get("title", "Untitled")
-                    url = src.get("url", "")
-                    source_lines.append(f"[{j}] {title} — {url}")
-            source_section = "\n".join(source_lines)
-
-            # Rebuild instructions with updated source count
-            instruction_lines = ["\n# Instructions"]
-            if all_sources:
-                n = len(all_sources)
-                instruction_lines.append(
-                    "Synthesize the above research results into a comprehensive, "
-                    "well-structured report that addresses the research goal. "
-                    f"Use [n] inline citations where n is between 1 and {n} (inclusive). "
-                    f"NEVER use a citation number greater than {n} — the source list has "
-                    f"exactly {n} entries and there are no others. "
-                    "Include a ## Sources section at the end listing only the sources you actually cited."
-                )
-            else:
-                instruction_lines.append(
-                    "Synthesize the above research results into a comprehensive, "
-                    "well-structured report that addresses the research goal. "
-                    "No source URLs were collected for this session, so do NOT include "
-                    "any inline citations ([n]) or a Sources section in your report."
-                )
-            instructions = "\n".join(instruction_lines)
-
-            # Recalculate fixed tokens with updated sources and instructions
-            source_tokens = estimate_tokens(source_section)
-            instruction_tokens_actual = estimate_tokens(instructions)
-            fixed_tokens = system_tokens + header_tokens + source_tokens + instruction_tokens_actual
+            source_collection = self._collect_sources(results, included_result_indices)
+            instructions = self._render_instructions(len(source_collection.entries))
+            fixed_tokens = self._calculate_fixed_tokens(
+                header, source_collection.section, instructions
+            )
 
             if self.cli:
-                self.cli.show_info(f"Trimmed 1 result to enforce hard budget cap (now {fixed_tokens + current_tokens} tokens)")
+                self.cli.show_info(
+                    f"Trimmed 1 result to enforce hard budget cap (now {fixed_tokens + current_tokens} tokens)"
+                )
 
-        # Check if we trimmed everything (but allow empty results list)
         if not result_blocks and len(results) > 0:
             raise ValueError(
                 f"Synthesis budget ({self.input_token_budget} tokens) is insufficient "
@@ -396,16 +224,8 @@ class Synthesizer:
                 f"Increase input_token_budget."
             )
 
-        # Flatten result blocks into lines
-        result_lines = []
-        for block_lines, _, _, _ in result_blocks:
-            result_lines.extend(block_lines)
-
-        # Assemble final context
-        context_parts = [header] + result_lines + [source_section, instructions]
-        context = "\n".join(context_parts)
-
-        # Calculate total tokens and omitted results
+        result_lines = self._flatten_result_blocks(result_blocks)
+        context = "\n".join([header] + result_lines + [source_collection.section, instructions])
         total_tokens = fixed_tokens + current_tokens
         included_results = results_with_full_content + results_summary_only
         omitted_results = len(results) - included_results
@@ -418,7 +238,195 @@ class Synthesizer:
             omitted_results=omitted_results,
         )
 
-        return context, len(all_sources), stats
+        return context, len(source_collection.entries), stats
+
+    def _render_header(self, goal: str, result_count: int) -> str:
+        """Render the fixed synthesis header."""
+        return "\n".join(
+            [
+                f"# Research Goal\n{goal}\n",
+                "# Research Results\n",
+                f"Total tasks completed: {result_count}\n",
+            ]
+        )
+
+    def _estimate_initial_fixed_tokens(self, header: str) -> int:
+        """Estimate fixed prompt overhead before sources are known."""
+        instruction_base = (
+            "\n# Instructions\nSynthesize the above research results into a "
+            "comprehensive, well-structured report that addresses the research goal."
+        )
+        return (
+            estimate_tokens(self.system_prompt)
+            + estimate_tokens(header)
+            + estimate_tokens(instruction_base)
+            + 200
+        )
+
+    def _remaining_budget_for_results(self, initial_fixed: int) -> int:
+        """Return the budget left for result blocks after fixed prompt costs."""
+        if initial_fixed >= self.input_token_budget:
+            raise ValueError(
+                f"Synthesis budget ({self.input_token_budget} tokens) is insufficient "
+                f"for minimal prompt components ({initial_fixed} tokens)."
+            )
+        return self.input_token_budget - initial_fixed
+
+    def _build_result_block(
+        self,
+        result: ToolResult,
+        result_number: int,
+        current_tokens: int,
+        remaining_budget: int,
+    ) -> tuple[ResultBlock | None, bool]:
+        """Build the largest allowed block for a single result."""
+        status = "Success" if result.success else "Failed"
+        summary, summary_truncated = self._cap_summary(result.summary)
+        minimum_lines = [
+            f"## Result {result_number}: Task {result.task_id}",
+            f"Tool: {result.tool_name}",
+            f"Status: {status}",
+            f"Summary: {summary}",
+        ]
+        minimum_text = "\n".join(minimum_lines)
+        minimum_tokens = estimate_tokens(minimum_text)
+        content = self._clean_full_content(result.full_content)
+        content_tokens = estimate_tokens(content)
+        full_block = ResultBlock(
+            lines=minimum_lines + [f"\n{content}\n"],
+            tokens=minimum_tokens + content_tokens,
+            result_index=result_number - 1,
+            kind="full",
+        )
+        if current_tokens + full_block.tokens <= remaining_budget:
+            return full_block, summary_truncated
+
+        summary_line = "[Full content omitted due to synthesis budget]\n"
+        summary_block = ResultBlock(
+            lines=minimum_lines + [summary_line],
+            tokens=minimum_tokens + estimate_tokens(summary_line),
+            result_index=result_number - 1,
+            kind="summary",
+        )
+        if current_tokens + summary_block.tokens <= remaining_budget:
+            return summary_block, True
+
+        minimal_lines = [
+            f"## Result {result_number}: Task {result.task_id}",
+            f"Tool: {result.tool_name}",
+            f"Status: {status}",
+            "[Summary and content omitted due to synthesis budget]",
+        ]
+        minimal_block = ResultBlock(
+            lines=minimal_lines,
+            tokens=estimate_tokens("\n".join(minimal_lines)),
+            result_index=result_number - 1,
+            kind="minimal",
+        )
+        if current_tokens + minimal_block.tokens <= remaining_budget:
+            return minimal_block, True
+
+        return None, True
+
+    def _cap_summary(self, summary: str) -> tuple[str, bool]:
+        """Cap long summaries while preserving prior truncation wording."""
+        if len(summary) <= 500:
+            return summary, False
+        return summary[:497] + "...[summary truncated]", True
+
+    def _clean_full_content(self, content: str) -> str:
+        """Normalize tool content before inclusion in synthesis."""
+        return self._strip_inline_citations(self._strip_sources_section(content))
+
+    def _collect_sources(
+        self, results: list[ToolResult], included_result_indices: list[int]
+    ) -> SourceCollection:
+        """Collect unique metadata sources only from included result blocks."""
+        all_sources: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+
+        for idx in included_result_indices:
+            for src in results[idx].metadata.get("sources", []):
+                normalized = self._normalize_source(src)
+                if not normalized:
+                    continue
+                url = normalized["url"]
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                all_sources.append(normalized)
+
+        return SourceCollection(
+            entries=all_sources,
+            section=self._render_source_section(all_sources),
+        )
+
+    def _normalize_source(self, source: Any) -> dict[str, str] | None:
+        """Normalize metadata sources to title/url dictionaries."""
+        if isinstance(source, dict):
+            url = source.get("url", "")
+            title = source.get("title", url)
+        else:
+            url = str(source)
+            title = url
+        if not url:
+            return None
+        return {"url": url, "title": title}
+
+    def _render_source_section(self, sources: list[dict[str, str]]) -> str:
+        """Render the authoritative source list for synthesis."""
+        if not sources:
+            return ""
+
+        n = len(sources)
+        lines = [f"\n# Available Sources — {n} total (ONLY these {n} sources exist)"]
+        lines.append(
+            f"CRITICAL: The source list below contains exactly {n} entries numbered "
+            f"[1] through [{n}]. You MUST NOT use any citation number outside this "
+            f"range. Any [n] where n > {n} is invalid and must not appear in your report."
+        )
+        for i, source in enumerate(sources, 1):
+            lines.append(f"[{i}] {source.get('title', 'Untitled')} — {source.get('url', '')}")
+        return "\n".join(lines)
+
+    def _render_instructions(self, source_count: int) -> str:
+        """Render synthesis instructions for the current source count."""
+        instruction_lines = ["\n# Instructions"]
+        if source_count > 0:
+            instruction_lines.append(
+                "Synthesize the above research results into a comprehensive, "
+                "well-structured report that addresses the research goal. "
+                f"Use [n] inline citations where n is between 1 and {source_count} (inclusive). "
+                f"NEVER use a citation number greater than {source_count} — the source list has "
+                f"exactly {source_count} entries and there are no others. "
+                "Include a ## Sources section at the end listing only the sources you actually cited."
+            )
+        else:
+            instruction_lines.append(
+                "Synthesize the above research results into a comprehensive, "
+                "well-structured report that addresses the research goal. "
+                "No source URLs were collected for this session, so do NOT include "
+                "any inline citations ([n]) or a Sources section in your report."
+            )
+        return "\n".join(instruction_lines)
+
+    def _calculate_fixed_tokens(
+        self, header: str, source_section: str, instructions: str
+    ) -> int:
+        """Calculate total fixed token overhead for the current prompt shape."""
+        return (
+            estimate_tokens(self.system_prompt)
+            + estimate_tokens(header)
+            + estimate_tokens(source_section)
+            + estimate_tokens(instructions)
+        )
+
+    def _flatten_result_blocks(self, result_blocks: list[ResultBlock]) -> list[str]:
+        """Flatten structured result blocks into prompt lines."""
+        lines: list[str] = []
+        for block in result_blocks:
+            lines.extend(block.lines)
+        return lines
 
     @staticmethod
     def _count_emitted_sources(report: str) -> int:

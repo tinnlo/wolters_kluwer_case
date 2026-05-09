@@ -1,10 +1,36 @@
 #!/usr/bin/env python3
 """Generate a real transcript from a completed session."""
 
+import json
 import sys
 from datetime import datetime
+
 from src.state import StateManager
 from src.models import TaskStatus
+
+
+def _count_unique_source_urls(results: list) -> int:
+    """Count unique metadata source URLs from successful results only.
+
+    Matches the original behavior: only successful results contribute to the
+    source count, and only metadata["sources"] is examined (not full_content).
+    """
+    urls: set[str] = set()
+    for result in results:
+        # Only count sources from successful results
+        if not result.success:
+            continue
+
+        # Extract URLs from metadata sources only
+        for source in result.metadata.get("sources", []):
+            if isinstance(source, dict):
+                url = source.get("url", "")
+            else:
+                url = str(source)
+            if url:
+                urls.add(url)
+
+    return len(urls)
 
 def generate_transcript(session_id: str, output_file: str) -> None:
     """Generate a markdown transcript from a session."""
@@ -89,7 +115,6 @@ def generate_transcript(session_id: str, output_file: str) -> None:
 
             # Parse result data from full_content
             if result.success and result.full_content:
-                import json
                 try:
                     data = json.loads(result.full_content)
                     if isinstance(data, dict) and 'results' in data:
@@ -132,9 +157,8 @@ def generate_transcript(session_id: str, output_file: str) -> None:
     lines.append(f"**Tasks:** {completed}/{len(tasks)} completed, {failed} failed")
     lines.append(f"**Duration:** {duration_str}")
 
-    # Count total sources
-    total_sources = sum(1 for r in results if r.success)
-    lines.append(f"**Total Sources:** {total_sources * 5}+ unique sources across all tasks")
+    total_sources = _count_unique_source_urls(results)
+    lines.append(f"**Total Sources:** {total_sources} unique sources across all tasks")
     lines.append("")
 
     # Write to file
