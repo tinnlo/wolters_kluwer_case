@@ -1,6 +1,6 @@
 # Research Agent
 
-A goal-driven async research agent built from scratch for the Wolters Kluwer AI
+A goal-driven research agent built from scratch for the Wolters Kluwer AI
 Engineering take-home case study. No agent frameworks — pure Python with OpenAI and Tavily.
 
 ---
