@@ -179,10 +179,10 @@ def main() -> None:
         session = state.get_session(session_id)
         if session and session.goal:
             safe_goal = _sanitize_filename(session.goal)
-            output_file = f"examples/transcript_{safe_goal}.md"
+            output_file = str(REPO_ROOT / "examples" / f"transcript_{safe_goal}.md")
         else:
             safe_id = _sanitize_filename(session_id)
-            output_file = f"examples/transcript_{safe_id}.md"
+            output_file = str(REPO_ROOT / "examples" / f"transcript_{safe_id}.md")
 
     generate_transcript(session_id, output_file)
 
