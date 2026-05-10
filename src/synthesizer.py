@@ -330,9 +330,9 @@ class Synthesizer:
 
     def _cap_summary(self, summary: str) -> tuple[str, bool]:
         """Cap long summaries while preserving prior truncation wording."""
-        if len(summary) <= 500:
+        if len(summary) <= 1000:
             return summary, False
-        return summary[:497] + "...[summary truncated]", True
+        return summary[:997] + "...[summary truncated]", True
 
     def _clean_full_content(self, content: str) -> str:
         """Normalize tool content before inclusion in synthesis."""
@@ -364,8 +364,8 @@ class Synthesizer:
     def _normalize_source(self, source: Any) -> dict[str, str] | None:
         """Normalize metadata sources to title/url dictionaries."""
         if isinstance(source, dict):
-            url = source.get("url", "")
-            title = source.get("title", url)
+            url = str(source.get("url", "") or "")
+            title = str(source.get("title", url) or url)
         else:
             url = str(source)
             title = url

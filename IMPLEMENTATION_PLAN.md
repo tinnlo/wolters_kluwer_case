@@ -42,7 +42,7 @@ User Input → Planning Agent → TODO List → Execution Agent (with Tools) →
 | No agent frameworks | Custom Python controller, prompts, context handling, and tool dispatch | Dependency list and code contain no LangChain, LangGraph, AutoGen, CrewAI, or equivalent agent framework |
 | Planning minimum requirement | Structured task plan from user goal | Planner produces validated tasks with IDs, descriptions, status, and dependencies |
 | Execution loop minimum requirement | Sequential task loop with dependency resolution | Loop selects the next task, executes it, updates status, and continues until completion or a reported failure |
-| Tool use minimum requirement | Tavily web search (required) + Firecrawl scraper (optional enrichment) | At least one task uses Tavily against a live query and records source URLs. Firecrawl may be used for deep content extraction if time permits. |
+| Tool use minimum requirement | Tavily web search (required) | At least one task uses Tavily against a live query and records source URLs. |
 | Context strategy minimum requirement | Basic context selection plus stored tool results | README explains what context is kept (goal, plan, recent results), what is stored in SQLite, and basic selection strategy |
 | Evaluation and communication | README, evaluation scenarios, transcript, demo video | Submission includes run instructions, 3-5 scenarios with success criteria, a real transcript, and a 3-5 minute demo video |
 | Keep scope small and focused | Bonus features are gated behind the core loop | SQLite resume, document reader, code execution, UI, and advanced tracing do not block the minimum working demo |
@@ -62,7 +62,6 @@ This document started as the initial delivery plan. The shipped repository is in
 - **Persistence/resume:** SQLite-backed resume is included and treated as shipped polish because it strengthens the core `goal -> plan -> execute -> log -> result` flow.
 
 **Deferred ideas from the original plan:**
-- Firecrawl integration
 - Local document reader
 - Code execution tool
 - Broader multi-tool expansion beyond Tavily
@@ -89,7 +88,6 @@ These are intentional deferrals, not missing deliverables. For submission review
 
 **Tools:**
 - **Tavily Search API** - AI-optimized web search for research tasks (required real tool)
-- **Firecrawl API** - Deep web scraping and content extraction (optional enrichment - only if Tavily is working end-to-end)
 - **File Operations** - Optional local document reading if time remains
 - **Code Execution** (optional bonus) - Safe Python code execution for calculations only after the core loop works
 
@@ -107,9 +105,6 @@ These are intentional deferrals, not missing deliverables. For submission review
 - `python-dotenv` - Environment configuration
 - `httpx` - Async HTTP client for tool calls
 - `pytest` - Testing framework
-
-**Optional Libraries (install only if implementing):**
-- `firecrawl-py` - Firecrawl Python SDK for web scraping (optional enrichment)
 
 ---
 
@@ -157,7 +152,6 @@ graph TD
     subgraph TOOLS["Tool Registry"]
         REG["Tool Dispatcher<br>Abstract interface · Selection logic"]
         SEARCH["Web Search (Tavily)<br>AI-optimized search<br>Source URLs · Metadata"]
-        SCRAPE["Web Scraper (Firecrawl)<br>Deep content extraction<br>URL → Clean markdown<br>(optional enrichment)"]
         DOC["Document Reader<br>Local file I/O<br>Markdown · Text extraction<br>(optional)"]
     end
 
@@ -177,10 +171,8 @@ graph TD
     EXEC --> CTX
     EXEC --> REG
     REG --> SEARCH
-    REG --> SCRAPE
     REG --> DOC
     SEARCH --> DB
-    SCRAPE --> DB
     DOC --> DB
     DB --> SYNTH
     SYNTH --> CLI
@@ -199,7 +191,7 @@ graph TD
     class CTRL orchestration
     class PLAN planning
     class EXEC,CTX execution
-    class REG,SEARCH,SCRAPE,DOC tools
+    class REG,SEARCH,DOC tools
     class SYNTH synthesis
     class DB state
 
@@ -374,21 +366,18 @@ User: [goal]
 3. Build Web Search tool with Tavily API integration (REQUIRED - priority 1)
 4. Add error handling, retries, and rate limiting for Tavily
 5. Implement tool result formatting and storage
-6. Build Web Scraper tool with Firecrawl API integration (OPTIONAL - only if Tavily works end-to-end with 30+ min remaining)
-7. Build Document Reader tool for local file operations (OPTIONAL - lowest priority)
+6. Build Document Reader tool for local file operations (OPTIONAL - lowest priority)
 
 **Success Criteria:**
 - ✅ Web search returns relevant, recent results for technical queries (Tavily) - REQUIRED
-- ✅ Web scraper extracts full article content from URLs (Firecrawl) - OPTIONAL
 - ✅ Document reader extracts content from markdown/text files - OPTIONAL
 - ✅ Tools handle errors gracefully (API failures, rate limits, invalid inputs)
 - ✅ Tool results are properly formatted and stored in SQLite
 
 **Critical Files:**
-- `src/tools/base.py` - Abstract Tool interface
+- `src/tools/base.py` - Abstract tool interface
 - `src/tools/registry.py` - Tool registration and selection
 - `src/tools/web_search.py` - Tavily integration (REQUIRED)
-- `src/tools/web_scraper.py` - Firecrawl integration (OPTIONAL)
 - `src/tools/document_reader.py` - File I/O operations (OPTIONAL)
 
 **Tool Interface:**
@@ -405,7 +394,6 @@ class Tool(ABC):
 
 **Tests:**
 - Search for "Python async best practices" and verify results (Tavily) - REQUIRED
-- Scrape a technical article URL and verify clean markdown output (Firecrawl) - OPTIONAL
 - Read a local markdown file and extract content (Document Reader) - OPTIONAL
 - Test error handling with invalid API key
 - Test rate limiting with rapid successive calls
@@ -414,7 +402,6 @@ class Tool(ABC):
 - Tavily web search executes during the demo path with live API calls
 - Tool calls are logged with task ID, input/query, status, summary, and source metadata
 - The final transcript must use live Tavily output, not mocked success data
-- Firecrawl is added only if Tavily is working end-to-end with 30+ minutes remaining in Stage 3
 - Optional tools are deferred unless they improve the required demo without risking completion
 
 ---
@@ -644,7 +631,6 @@ wolters_kluwer_case/
 │   │   ├── base.py                # Abstract tool interface
 │   │   ├── registry.py            # Tool discovery and selection
 │   │   ├── web_search.py          # Tavily integration
-│   │   ├── web_scraper.py         # Firecrawl integration (optional)
 │   │   └── document_reader.py     # File I/O operations (optional)
 │   │
 │   └── prompts/
@@ -841,7 +827,7 @@ wolters_kluwer_case/
 |-------|----------|------------|-----------------|
 | Stage 1: Foundation | 1.25 hours | 1.25h | Working data models, state/log storage, CLI scaffold |
 | Stage 2: Planning | 0.75 hours | 2.0h | Goal → structured task plan |
-| Stage 3: Tools | 1.5 hours | 3.5h | Tavily search working with logged results (Firecrawl if time permits) |
+| Stage 3: Tools | 1.5 hours | 3.5h | Tavily search working with logged results |
 | Stage 4: Agent Loop | 1.25 hours | 4.75h | End-to-end execution |
 | Stage 5: Evaluation | 1.0 hour | 5.75h | README, transcript, evaluation notes, demo prep |
 | **Buffer** | 0.25 hours | 6.0h | Unexpected issues or bonus polish |

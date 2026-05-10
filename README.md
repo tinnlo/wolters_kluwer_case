@@ -68,10 +68,14 @@ Use `--auto-approve` to automatically approve the generated plan without user co
 **Regenerating transcripts:**
 To generate a markdown transcript from any completed session:
 ```bash
-python generate_transcript.py <session-id> [output-file]
+python src/generate_transcript.py <session-id> [output-file]
 # Example:
-python generate_transcript.py 33389d05-6a93-4493-8135-94f760e677cf examples/transcript_webassembly.md
+python src/generate_transcript.py 33389d05-6a93-4493-8135-94f760e677cf examples/transcript_webassembly.md
 ```
+
+The implementation lives in `src/generate_transcript.py`; the top-level
+`generate_transcript.py` is kept as a compatibility entrypoint for existing
+imports and automation.
 
 ---
 

@@ -43,6 +43,7 @@ class Agent:
         self.context = context_manager
         self.cli = cli
         self._max_plan_refinements = 3
+        self.current_session_id: str | None = None
 
     async def run(self, goal: str, auto_approve: bool = False) -> str:
         """Run the complete agent loop.
@@ -59,6 +60,7 @@ class Agent:
         """
         # Create session
         session_id = str(uuid.uuid4())
+        self.current_session_id = session_id
         session = AgentSession(
             session_id=session_id,
             goal=goal,
@@ -90,6 +92,10 @@ class Agent:
             self._display_session_summary(session_id)
             return final_report
 
+        except KeyboardInterrupt:
+            self._log(session_id, "WARNING", "Agent", "Session interrupted by user")
+            self.state.update_session(session_id, status=SessionStatus.INTERRUPTED)
+            raise
         except Exception as e:
             self._log(session_id, "ERROR", "Agent", f"Agent failed: {str(e)}")
             self.state.update_session(session_id, status=SessionStatus.FAILED)
@@ -151,6 +157,8 @@ class Agent:
                 "Start a new session instead."
             )
 
+        self.current_session_id = session_id
+
         self._log(session_id, "INFO", "Agent", f"Resuming session: {session_id}")
         self.cli.show_info(f"Resuming session {session_id} (goal: {session.goal})")
 
@@ -178,6 +186,10 @@ class Agent:
             self._display_session_summary(session_id)
             return final_report
 
+        except KeyboardInterrupt:
+            self._log(session_id, "WARNING", "Agent", "Session interrupted by user")
+            self.state.update_session(session_id, status=SessionStatus.INTERRUPTED)
+            raise
         except Exception as e:
             self._log(session_id, "ERROR", "Agent", f"Resume failed: {str(e)}")
             self.state.update_session(session_id, status=SessionStatus.FAILED)

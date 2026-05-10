@@ -13,6 +13,10 @@ from src.cli import CLI
 
 console = Console()
 
+# Global reference to track current session for interrupt handling
+_current_agent = None
+_current_state = None
+
 
 def _cmd_list_sessions(db_path: str = "data/sessions.db") -> None:
     """Print all past sessions in a table."""
@@ -29,14 +33,16 @@ def _cmd_list_sessions(db_path: str = "data/sessions.db") -> None:
     table.add_column("Session ID", style="cyan", width=38)
     table.add_column("Status", style="white", width=14)
     table.add_column("Goal", style="white", width=60)
-    table.add_column("Created", style="dim", width=20)
+    table.add_column("Created (Local)", style="dim", width=20)
 
     for s in sessions:
+        # Convert UTC to local time for display
+        local_time = s.created_at.astimezone()
         table.add_row(
             s.session_id,
             s.status.value,
             s.goal[:58] + "…" if len(s.goal) > 58 else s.goal,
-            s.created_at.strftime("%Y-%m-%d %H:%M"),
+            local_time.strftime("%Y-%m-%d %H:%M"),
         )
 
     console.print(table)
@@ -109,6 +115,8 @@ def _cmd_show_help() -> None:
 
 async def main() -> None:
     """Main CLI entry point."""
+    global _current_agent, _current_state
+
     load_dotenv()
 
     args = sys.argv[1:]
@@ -142,12 +150,19 @@ async def main() -> None:
         cli.print_banner()
         cli.show_info(f"Resuming session: {session_id}")
         agent = create_agent()
+        global _current_agent, _current_state
+        _current_agent = agent
+        _current_state = agent.state
         try:
             await agent.resume(session_id)
         except ValueError as e:
             cli.show_error(str(e))
             sys.exit(1)
         except KeyboardInterrupt:
+            # Update session status to INTERRUPTED if we have a session
+            if agent.current_session_id:
+                from src.models import SessionStatus
+                agent.state.update_session(agent.current_session_id, status=SessionStatus.INTERRUPTED)
             cli.show_warning("\nResearch interrupted by user")
             sys.exit(1)
         except Exception as e:
@@ -155,11 +170,18 @@ async def main() -> None:
             sys.exit(1)
         return
 
-    # Check for --auto-approve flag
+    # Check for --auto-approve flag before rejecting unknown flags
     auto_approve = False
     if "--auto-approve" in args:
         auto_approve = True
         args.remove("--auto-approve")
+
+    # Reject unknown flags (anything starting with -- that isn't handled above)
+    unknown_flags = [a for a in args if a.startswith("--")]
+    if unknown_flags:
+        console.print(f"[red]Unknown option(s): {' '.join(unknown_flags)}[/red]")
+        _cmd_show_help()
+        sys.exit(1)
 
     # Normal run
     cli = CLI()
@@ -172,10 +194,16 @@ async def main() -> None:
 
     cli.show_info("Initializing research agent...")
     agent = create_agent()
+    _current_agent = agent
+    _current_state = agent.state
 
     try:
         await agent.run(goal, auto_approve=auto_approve)
     except KeyboardInterrupt:
+        # Update session status to INTERRUPTED if we have a session
+        if agent.current_session_id:
+            from src.models import SessionStatus
+            agent.state.update_session(agent.current_session_id, status=SessionStatus.INTERRUPTED)
         cli.show_warning("\n\nResearch interrupted by user")
         cli.show_info("To resume this session later, use:")
         cli.show_info("  python main.py --list-sessions")
@@ -187,4 +215,15 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Update session status to INTERRUPTED if we have an active session
+        if _current_agent and _current_agent.current_session_id and _current_state:
+            from src.models import SessionStatus
+            _current_state.update_session(
+                _current_agent.current_session_id,
+                status=SessionStatus.INTERRUPTED
+            )
+        console.print("\n[yellow]Interrupted by user[/yellow]")
+        sys.exit(130)  # Standard exit code for SIGINT

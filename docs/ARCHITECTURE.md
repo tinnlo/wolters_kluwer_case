@@ -137,7 +137,16 @@ stateDiagram-v2
     SYNTHESIZING --> COMPLETED : report saved
     EXECUTING --> FAILED : unhandled exception
     SYNTHESIZING --> FAILED : no successful results
+    PLANNING --> INTERRUPTED : user pressed Ctrl+C
+    EXECUTING --> INTERRUPTED : user pressed Ctrl+C
+    SYNTHESIZING --> INTERRUPTED : user pressed Ctrl+C
+    INTERRUPTED --> EXECUTING : --resume (continues from where stopped)
 ```
+
+**Status semantics:**
+- **FAILED**: Actual errors, exceptions, or unrecoverable issues
+- **INTERRUPTED**: User intentionally stopped the session (Ctrl+C); can be resumed
+- **CANCELLED**: User rejected the plan during planning phase
 
 **`TaskStatus` lifecycle:**
 
@@ -297,10 +306,10 @@ When the budget is exhausted before all results are included, the CLI logs:
    - is `COMPLETED` (`"already completed"`), or
    - is `CANCELLED` (`"was cancelled by the user"`)
 2. If status is `PLANNING`, resumes plan refinement and approval flow. If a plan exists, displays it for approval; otherwise generates a new plan.
-3. If status is `EXECUTING`, `SYNTHESIZING`, or `FAILED`, resets any `IN_PROGRESS` **or `FAILED`** tasks to `PENDING`. `FAILED` tasks are reset because the primary resume use-case is transient network/API failure; without this reset, `--resume` would be a no-op for the most common failure mode.
+3. If status is `EXECUTING`, `SYNTHESIZING`, `INTERRUPTED`, or `FAILED`, resets any `IN_PROGRESS` **or `FAILED`** tasks to `PENDING`. `FAILED` tasks are reset because the primary resume use-case is transient network/API failure; without this reset, `--resume` would be a no-op for the most common failure mode.
 4. Re-enters the appropriate phase (planning, execution, or synthesis) and continues from where it left off, reusing all `COMPLETED` task results already in `tool_results`.
 
-This allows recovery from network failures, API rate limits, or manual interruption without discarding partial work.
+This allows recovery from network failures, API rate limits, or manual interruption (Ctrl+C) without discarding partial work. When a user interrupts a session with Ctrl+C, the status is set to `INTERRUPTED` (not `FAILED`), clearly distinguishing intentional stops from actual errors.
 
 ---
 

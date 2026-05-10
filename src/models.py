@@ -29,6 +29,7 @@ class SessionStatus(str, Enum):
     SYNTHESIZING = "synthesizing"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
     CANCELLED = "cancelled"
 
 
