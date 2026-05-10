@@ -70,7 +70,7 @@ To generate a markdown transcript from any completed session:
 ```bash
 python src/generate_transcript.py <session-id> [output-file]
 # Example:
-python src/generate_transcript.py 33389d05-6a93-4493-8135-94f760e677cf examples/transcript_webassembly.md
+python src/generate_transcript.py 33389d05-6a93-4493-8135-94f760e677cf examples/my_transcript.md
 ```
 
 The implementation lives in `src/generate_transcript.py`; the top-level
@@ -95,7 +95,7 @@ python -m pytest tests/ -v   # 77 tests, all offline (no API calls)
 | [docs/EVALUATION.md](docs/EVALUATION.md) | **Context strategy, evaluation scenarios, trade-offs** |
 | [docs/RUNNING.md](docs/RUNNING.md) | Prerequisites, install, CLI usage, test commands |
 | [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) | End-to-end trace: goal → plan → execute → synthesise |
-| [examples/transcript_webassembly.md](examples/transcript_webassembly.md) | Real session transcript from live API calls |
+| [examples/](examples/) | Real session transcripts from live API calls |
 
 ---
 
