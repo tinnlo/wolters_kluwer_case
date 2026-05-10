@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from src.models import TaskStatus
+from src.models import TaskStatus, ToolResult
 from src.state import StateManager
 
 # Anchor database path to repo root, not CWD
@@ -22,7 +22,7 @@ def _sanitize_filename(text: str, max_length: int = 50) -> str:
     return safe[:max_length].strip("_")
 
 
-def _count_unique_source_urls(results: list) -> int:
+def _count_unique_source_urls(results: list[ToolResult]) -> int:
     """Count unique metadata source URLs from successful results only."""
     urls: set[str] = set()
     for result in results:
