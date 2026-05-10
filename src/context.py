@@ -20,7 +20,12 @@ def estimate_tokens(text: str, model: str = "gpt-4") -> int:
     if not text:
         return 0
     try:
-        encoding = tiktoken.encoding_for_model(model)
+        # Normalize model names to tiktoken-compatible identifiers
+        # gpt-5.x and gpt-4o use o200k_base encoding
+        if model.startswith("gpt-5") or model.startswith("gpt-4o"):
+            encoding = tiktoken.get_encoding("o200k_base")
+        else:
+            encoding = tiktoken.encoding_for_model(model)
         return len(encoding.encode(text))
     except Exception:
         # Fallback to heuristic if tiktoken fails

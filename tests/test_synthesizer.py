@@ -251,7 +251,7 @@ async def test_synthesize_raises_on_empty_response():
 
 def test_budget_enforcement_with_small_budget():
     """With a small budget, full content should be truncated."""
-    synth = Synthesizer(api_key="test-key", input_token_budget=2_000)
+    synth = Synthesizer(api_key="test-key", input_token_budget=1_500)
 
     # Create 10 results with large content
     results = []
@@ -263,7 +263,7 @@ def test_budget_enforcement_with_small_budget():
 
     # Budget enforcement: full content is truncated
     # With hard cap, not all results may be included
-    assert stats.total_tokens <= 2_000  # Hard cap enforced
+    assert stats.total_tokens <= 1_500  # Hard cap enforced
     # At least some results should be included
     assert stats.results_with_full_content + stats.results_summary_only >= 1
     # Most included results should be summary-only due to budget

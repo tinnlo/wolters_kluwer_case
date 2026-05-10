@@ -5,9 +5,14 @@ import json
 import re
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from src.models import TaskStatus
 from src.state import StateManager
+
+# Anchor database path to repo root, not CWD
+REPO_ROOT = Path(__file__).parent.parent
+DB_PATH = REPO_ROOT / "data" / "sessions.db"
 
 
 def _sanitize_filename(text: str, max_length: int = 50) -> str:
@@ -37,7 +42,7 @@ def _count_unique_source_urls(results: list) -> int:
 
 def generate_transcript(session_id: str, output_file: str) -> None:
     """Generate a markdown transcript from a session."""
-    state = StateManager("data/sessions.db")
+    state = StateManager(str(DB_PATH))
 
     session = state.get_session(session_id)
     if not session:
@@ -170,7 +175,7 @@ def main() -> None:
     if len(sys.argv) > 2:
         output_file = sys.argv[2]
     else:
-        state = StateManager("data/sessions.db")
+        state = StateManager(str(DB_PATH))
         session = state.get_session(session_id)
         if session and session.goal:
             safe_goal = _sanitize_filename(session.goal)
