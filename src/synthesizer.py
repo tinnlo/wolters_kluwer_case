@@ -257,9 +257,9 @@ class Synthesizer:
             "comprehensive, well-structured report that addresses the research goal."
         )
         return (
-            estimate_tokens(self.system_prompt)
-            + estimate_tokens(header)
-            + estimate_tokens(instruction_base)
+            estimate_tokens(self.system_prompt, self.model)
+            + estimate_tokens(header, self.model)
+            + estimate_tokens(instruction_base, self.model)
             + 200
         )
 
@@ -289,9 +289,9 @@ class Synthesizer:
             f"Summary: {summary}",
         ]
         minimum_text = "\n".join(minimum_lines)
-        minimum_tokens = estimate_tokens(minimum_text)
+        minimum_tokens = estimate_tokens(minimum_text, self.model)
         content = self._clean_full_content(result.full_content)
-        content_tokens = estimate_tokens(content)
+        content_tokens = estimate_tokens(content, self.model)
         full_block = ResultBlock(
             lines=minimum_lines + [f"\n{content}\n"],
             tokens=minimum_tokens + content_tokens,
@@ -304,7 +304,7 @@ class Synthesizer:
         summary_line = "[Full content omitted due to synthesis budget]\n"
         summary_block = ResultBlock(
             lines=minimum_lines + [summary_line],
-            tokens=minimum_tokens + estimate_tokens(summary_line),
+            tokens=minimum_tokens + estimate_tokens(summary_line, self.model),
             result_index=result_number - 1,
             kind="summary",
         )
@@ -319,7 +319,7 @@ class Synthesizer:
         ]
         minimal_block = ResultBlock(
             lines=minimal_lines,
-            tokens=estimate_tokens("\n".join(minimal_lines)),
+            tokens=estimate_tokens("\n".join(minimal_lines), self.model),
             result_index=result_number - 1,
             kind="minimal",
         )
@@ -415,10 +415,10 @@ class Synthesizer:
     ) -> int:
         """Calculate total fixed token overhead for the current prompt shape."""
         return (
-            estimate_tokens(self.system_prompt)
-            + estimate_tokens(header)
-            + estimate_tokens(source_section)
-            + estimate_tokens(instructions)
+            estimate_tokens(self.system_prompt, self.model)
+            + estimate_tokens(header, self.model)
+            + estimate_tokens(source_section, self.model)
+            + estimate_tokens(instructions, self.model)
         )
 
     def _flatten_result_blocks(self, result_blocks: list[ResultBlock]) -> list[str]:

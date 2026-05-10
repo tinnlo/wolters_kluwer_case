@@ -42,7 +42,7 @@ The synthesizer accounts for all prompt components and enforces a hard budget ca
 
 4. **Per-result inclusion** (while budget allows):
    - Task ID, tool name, status (Success/Failed)
-   - Summary capped at 500 characters (with `...[summary truncated]` if needed)
+   - Summary capped at 1000 characters (with `...[summary truncated]` if needed)
    - Either sanitized full content OR `[Full content omitted due to synthesis budget]`
 
 5. **Full content inclusion** (conditional on remaining budget):
@@ -289,16 +289,6 @@ python main.py --resume <session-id>
 1. Subclassing `Tool` ABC
 2. Implementing `can_handle()` and `execute()`
 3. Registering with `ToolRegistry`
-
-### 5. Token Estimation Heuristic
-
-**Trade-off**: Uses 4 chars/token heuristic instead of a tokenizer library (e.g., `tiktoken`).
-
-**Impact**: Budget enforcement is approximate. Actual token count may vary by ±20% depending on text characteristics (code vs prose, punctuation density).
-
-**Mitigation**: Budget has built-in headroom (100K budget for models with 128K+ context windows). Approximation error is acceptable for preventing overflow.
-
-**Why not tiktoken?**: Adds dependency, slower, and precision is not critical for budget enforcement (we're preventing overflow, not optimizing to the last token).
 
 ---
 

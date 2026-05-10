@@ -2,21 +2,29 @@
 
 from typing import Any
 
+import tiktoken
+
 from .models import Task, ToolResult
 
 
-def estimate_tokens(text: str) -> int:
-    """Estimate token count for text using simple heuristic.
+def estimate_tokens(text: str, model: str = "gpt-4") -> int:
+    """Estimate token count for text using tiktoken.
 
     Args:
         text: Text to estimate tokens for
+        model: Model name for tokenizer (default: gpt-4)
 
     Returns:
         Estimated token count (minimum 1 for non-empty text)
     """
     if not text:
         return 0
-    return max(1, len(text) // 4)
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except Exception:
+        # Fallback to heuristic if tiktoken fails
+        return max(1, len(text) // 4)
 
 
 class ContextManager:

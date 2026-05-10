@@ -272,7 +272,7 @@ This ensures the final prompt never exceeds `input_token_budget`.
 
 **Per-result minimum** (included while budget allows):
 - Task ID, tool name, status (Success/Failed)
-- Summary (capped at 500 characters with `...[summary truncated]` marker if needed)
+- Summary (capped at 1000 characters with `...[summary truncated]` marker if needed)
 - Either sanitized `full_content` OR `[Full content omitted due to synthesis budget]`
 
 **Full content inclusion** (conditional on remaining budget):
@@ -284,8 +284,8 @@ This ensures the final prompt never exceeds `input_token_budget`.
 
 The budget is configurable via the `input_token_budget` parameter to `Synthesizer.__init__()`,
 enabling deterministic testing with small budgets (e.g., 2,000 tokens) to trigger
-truncation. Token estimation uses a simple heuristic (4 characters per token) rather
-than a tokenizer library, trading accuracy for speed and zero dependencies.
+truncation. Token estimation uses `tiktoken` for accurate token counting with a fallback
+to a simple heuristic (4 characters per token) if tiktoken fails.
 
 When truncation occurs, the CLI logs:
 - Total estimated prompt tokens

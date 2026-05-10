@@ -47,7 +47,7 @@ python main.py --list-sessions
 # View a completed session's report
 python main.py --view <session-id>
 
-# Resume an interrupted session
+# Resume an interrupted or failed session
 python main.py --resume <session-id>
 
 # Run with automatic plan approval (non-interactive)

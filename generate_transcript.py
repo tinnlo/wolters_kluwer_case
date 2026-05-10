@@ -6,3 +6,7 @@ module continue to work via this shim.
 """
 from src.generate_transcript import *  # noqa: F401, F403
 from src.generate_transcript import _count_unique_source_urls  # noqa: F401
+
+if __name__ == "__main__":
+    from src.generate_transcript import main
+    main()

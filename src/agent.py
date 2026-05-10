@@ -131,7 +131,7 @@ class Agent:
 
         Sessions can be resumed from any phase:
         - PLANNING: Continue plan refinement and approval
-        - EXECUTING/SYNTHESIZING: Re-execute pending/failed tasks
+        - EXECUTING/SYNTHESIZING: Continue from the last incomplete step, retrying any in-progress or failed tasks
         - FAILED: Retry from where it failed
 
         Args:
